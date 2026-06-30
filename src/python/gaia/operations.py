@@ -11,11 +11,19 @@ from iop import BusinessOperation
 
 from .messages import ComputeResult, FileRequest, FileResult, StateRequest
 from .models import PhotometryChange, SourceFluxAggregate
-from .parsing import aggregate_source_flux
+from .parsing import source_flux_aggregate_batches
 from .runtime import GaiaSettings
 
 SOURCE_TABLE = SourceFluxAggregate._classname
 CHANGE_TABLE = PhotometryChange._classname
+RESULT_HEADER = (
+    "source_id",
+    "bp_min_flux",
+    "bp_max_flux",
+    "rp_min_flux",
+    "rp_max_flux",
+    "percentage_change",
+)
 
 
 @contextmanager
@@ -89,38 +97,18 @@ class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
 
 class GaiaImportOperation(GaiaSettings, BusinessOperation):
     def on_message(self, request: FileRequest) -> FileResult:
-        batch: list[tuple] = []
         with db() as (cursor, connection):
             cursor.execute(
                 f"DELETE FROM {SOURCE_TABLE} WHERE run_name = ? AND file_range = ?",
                 (request.run_name, request.file_range),
             )
             connection.commit()
-
-            with gzip.open(request.local_path, "rt", encoding="utf-8", newline="") as input_file:
-                reader = csv.reader(line for line in input_file if line and line[0] != "#")
-                next(reader, None)
-                for row in reader:
-                    if len(row) <= 16:
-                        continue
-                    stats = aggregate_source_flux(int(row[1]), row[11], row[16])
-                    if not stats.has_flux:
-                        continue
-                    batch.append(
-                        (
-                            request.run_name,
-                            request.file_range,
-                            stats.source_id,
-                            stats.bp_min_flux,
-                            stats.bp_max_flux,
-                            stats.rp_min_flux,
-                            stats.rp_max_flux,
-                        )
-                    )
-                    if len(batch) >= self.db_batch_size:
-                        self._insert(cursor, connection, batch)
-                        batch.clear()
-            if batch:
+            for batch in source_flux_aggregate_batches(
+                run_name=request.run_name,
+                file_range=request.file_range,
+                local_path=request.local_path,
+                batch_size=self.db_batch_size,
+            ):
                 self._insert(cursor, connection, batch)
         return FileResult(request.run_name, request.file_range, request.local_path)
 
@@ -194,6 +182,7 @@ class GaiaCsvExportOperation(GaiaSettings, BusinessOperation):
             )
             with temp.open("w", newline="", encoding="utf-8") as output:
                 writer = csv.writer(output)
+                writer.writerow(RESULT_HEADER)
                 while rows := cursor.fetchmany(1000):
                     writer.writerows(rows)
         os.replace(temp, self.results_file)

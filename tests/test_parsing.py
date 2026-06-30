@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
+import gzip
+
 from src.python.gaia.parsing import (
     aggregate_source_flux,
     max_percentage_change,
     min_max,
+    source_flux_aggregate_batches,
     valid_flux_values,
 )
 
@@ -54,3 +58,32 @@ def test_max_percentage_change_matches_sql_rules():
     assert max_percentage_change(None, None, 4.0, 10.0) == 150.0
     assert max_percentage_change(0.0, 10.0, None, None) is None
     assert max_percentage_change(None, None, None, None) is None
+
+
+def test_source_flux_aggregate_batches_streams_gzip_rows(tmp_path):
+    input_file = tmp_path / "input.csv.gz"
+    rows = [
+        [f"h{i}" for i in range(17)],
+        ["0", "42", *[""] * 9, "[10.0, 5.0]", *[""] * 4, "[3.0, 9.0]"],
+        ["0", "43", *[""] * 9, "[NaN]", *[""] * 4, ""],
+        ["0", "44", *[""] * 9, "[7.0]", *[""] * 4, "[1.0, 2.0]"],
+    ]
+    with gzip.open(input_file, "wt", encoding="utf-8", newline="") as output:
+        output.write("#comment\n")
+        csv.writer(output).writerows(rows)
+
+    batches = list(
+        source_flux_aggregate_batches(
+            run_name="run-1",
+            file_range="000000-003111",
+            local_path=str(input_file),
+            batch_size=2,
+        )
+    )
+
+    assert batches == [
+        [
+            ("run-1", "000000-003111", 42, 5.0, 10.0, 3.0, 9.0),
+            ("run-1", "000000-003111", 44, 7.0, 7.0, 1.0, 2.0),
+        ]
+    ]

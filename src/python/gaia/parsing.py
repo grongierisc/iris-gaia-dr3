@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import csv
+import gzip
 import math
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Optional
+
+AggregateRow = tuple[str, str, int, Optional[float], Optional[float], Optional[float], Optional[float]]
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,41 @@ def aggregate_source_flux(source_id: int, bp_flux: str, rp_flux: str) -> SourceF
         rp_min_flux=rp_min_flux,
         rp_max_flux=rp_max_flux,
     )
+
+
+def source_flux_aggregate_batches(
+    *,
+    run_name: str,
+    file_range: str,
+    local_path: str,
+    batch_size: int,
+) -> Iterator[list[AggregateRow]]:
+    batch: list[AggregateRow] = []
+    with gzip.open(local_path, "rt", encoding="utf-8", newline="") as input_file:
+        reader = csv.reader(line for line in input_file if line and line[0] != "#")
+        next(reader, None)
+        for row in reader:
+            if len(row) <= 16:
+                continue
+            stats = aggregate_source_flux(int(row[1]), row[11], row[16])
+            if not stats.has_flux:
+                continue
+            batch.append(
+                (
+                    run_name,
+                    file_range,
+                    stats.source_id,
+                    stats.bp_min_flux,
+                    stats.bp_max_flux,
+                    stats.rp_min_flux,
+                    stats.rp_max_flux,
+                )
+            )
+            if len(batch) >= max(1, batch_size):
+                yield batch
+                batch = []
+    if batch:
+        yield batch
 
 
 def flux_percentage_change(

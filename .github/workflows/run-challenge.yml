@@ -1,0 +1,47 @@
+name: Run Gaia DR3 Challenge
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-challenge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x RunChallenge.sh
+          ./RunChallenge.sh > /tmp/gaia-results.csv
+          test -s /tmp/gaia-results.csv
+          expected_header="source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change"
+          head -n 1 /tmp/gaia-results.csv | grep -Fxq "$expected_header"
+          tail -n +2 /tmp/gaia-results.csv | awk -F, 'NF != 6 { exit 1 }'
+          data_rows="$(tail -n +2 /tmp/gaia-results.csv | wc -l | tr -d ' ')"
+          test "$data_rows" -gt 0
+          cp /tmp/gaia-results.csv output/results.ci.csv
+          echo "data_rows=$data_rows"
+
+      - name: Upload result artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gaia-results
+          path: |
+            output/results.csv
+            output/results.ci.csv
+            output/results.err
+          if-no-files-found: ignore

@@ -271,6 +271,7 @@ def test_csv_export_operation_writes_results_file(tmp_path, monkeypatch):
 
     assert result == ComputeResult("run-6", 2, str(operation.results_file))
     assert operation.results_file.read_text(encoding="utf-8").splitlines() == [
+        "source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change",
         "1,2.0,3.0,4.0,5.0,150.0",
         "2,6.0,7.0,8.0,9.0,175.0",
     ]
