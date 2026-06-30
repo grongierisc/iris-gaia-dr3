@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ARCHIVE_URL_TEMPLATE = (
@@ -31,7 +32,21 @@ FIRST_20_FILE_RANGES = [
 ]
 
 OUTPUT_DIR = Path("/irisdev/app/output")
+DOWNLOAD_DIR = OUTPUT_DIR / "downloads"
 RESULTS_FILE = OUTPUT_DIR / "results.csv"
 DONE_FILE = OUTPUT_DIR / "results.done"
 ERROR_FILE = OUTPUT_DIR / "results.err"
 LOCK_FILE = OUTPUT_DIR / "results.lock"
+
+DOWNLOAD_POOL_SIZE = int(os.getenv("GAIA_DOWNLOAD_POOL", "4"))
+IMPORT_POOL_SIZE = int(os.getenv("GAIA_IMPORT_POOL", "4"))
+DB_BATCH_SIZE = int(os.getenv("GAIA_DB_BATCH_SIZE", "10000"))
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("GAIA_REQUEST_TIMEOUT_SECONDS", "1800"))
+
+
+def archive_url(file_range: str) -> str:
+    return ARCHIVE_URL_TEMPLATE % file_range
+
+
+def archive_file_name(file_range: str) -> str:
+    return f"EpochPhotometry_{file_range}.csv.gz"
