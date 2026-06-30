@@ -1,0 +1,4 @@
+dataclasses-json
+requests
+iris-pex-embedded-python>=4.0.0
+pytest
