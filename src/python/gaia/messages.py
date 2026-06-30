@@ -12,6 +12,11 @@ class GaiaBenchmarkRequest(Message):
 
 
 @dataclass
+class PrepareRunResult(Message):
+    run_name: str
+
+
+@dataclass
 class FileRequest(Message):
     run_name: str
     file_range: str

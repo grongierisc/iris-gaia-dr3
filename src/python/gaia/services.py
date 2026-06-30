@@ -11,10 +11,11 @@ class GaiaBenchmarkService(GaiaSettings, PollingBusinessService):
     # Target for sending benchmark requests to the Gaia benchmark process
     Output = target()
 
-    def on_poll(self):
+    def on_init(self):
         # Create the output directory if it doesn't exist
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
+    def on_poll(self):
         # Check if the benchmark has already been completed or failed
         if self.done_file.exists() or self.error_file.exists():
             return

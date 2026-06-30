@@ -83,7 +83,8 @@ The application is an IoP production declared in [settings.py](settings.py) and 
 Business roles:
 
 - `GaiaBenchmarkService`: polling entrypoint. It starts one benchmark run when neither `results.done` nor `results.err` exists.
-- `GaiaBenchmarkProcess`: orchestrates the workflow, prepares run state, and writes success/failure markers.
+- `GaiaBenchmarkProcess`: orchestrates the workflow and writes success/failure markers.
+- `GaiaPrepareRunOperation`: clears old output markers and persistent rows for one run.
 - `GaiaDownloadOperation`: downloads or reuses one local gzip file per request.
 - `GaiaImportOperation`: imports one gzip file per request and writes per-file source aggregates in DBAPI batches.
 - `GaiaComputeOperation`: aggregates persisted per-file rows into final qualifying `PhotometryChange` rows.
@@ -104,6 +105,7 @@ flowchart LR
   end
   subgraph group_operation["Operations"]
     direction TB
+    node_GaiaPrepareRunOperation["GaiaPrepareRunOperation<br/>Python.src.python.gaia.operations.GaiaPrepareRunOperation"]
     node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.src.python.gaia.operations.GaiaDownloadOperation"]
     node_GaiaImportOperation["GaiaImportOperation<br/>Python.src.python.gaia.operations.GaiaImportOperation"]
     node_GaiaComputeOperation["GaiaComputeOperation<br/>Python.src.python.gaia.operations.GaiaComputeOperation"]
@@ -114,6 +116,7 @@ flowchart LR
   node_GaiaBenchmarkProcess -- "DownloadOperation" --> node_GaiaDownloadOperation
   node_GaiaBenchmarkProcess -- "ExportOperation" --> node_GaiaCsvExportOperation
   node_GaiaBenchmarkProcess -- "ImportOperation" --> node_GaiaImportOperation
+  node_GaiaBenchmarkProcess -- "PrepareOperation" --> node_GaiaPrepareRunOperation
   node_GaiaBenchmarkService -- "Output" --> node_GaiaBenchmarkProcess
 ```
 
@@ -121,7 +124,7 @@ flowchart LR
 
 1. `GaiaBenchmarkService` polls once per second.
 2. It creates `output/results.lock` and sends a `GaiaBenchmarkRequest` to the process.
-3. `GaiaBenchmarkProcess` clears prior persistent rows and output markers.
+3. `GaiaBenchmarkProcess` asks `GaiaPrepareRunOperation` to clear prior persistent rows and output markers.
 4. The process fans out 20 download requests to `GaiaDownloadOperation`.
 5. Downloads are stored in `output/downloads/`. Existing readable gzip files are reused.
 6. The process fans out 20 import requests to `GaiaImportOperation`.

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import csv
 import gzip
-from contextlib import contextmanager
+import io
 
 import pytest
 
 from src.python.gaia import operations
-from src.python.gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest
+from src.python.gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, PrepareRunResult
 from src.python.gaia.operations import (
+    GaiaComputeOperation,
     GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
+    GaiaPrepareRunOperation,
 )
 from src.python.gaia.processes import GaiaBenchmarkProcess
 from src.python.gaia.services import GaiaBenchmarkService
@@ -31,6 +33,10 @@ class FakeConnection:
     def __init__(self):
         self.commit_count = 0
         self.closed = False
+        self.cursor_result = None
+
+    def cursor(self):
+        return self.cursor_result
 
     def commit(self):
         self.commit_count += 1
@@ -45,6 +51,7 @@ class FakeCursor:
         self.executemany_calls: list[tuple[str, list[tuple]]] = []
         self.fetchone_result = (0,)
         self.fetchmany_results: list[list[tuple]] = []
+        self.closed = False
 
     def execute(self, sql, params=()):
         self.executed.append((" ".join(sql.split()), tuple(params)))
@@ -61,18 +68,14 @@ class FakeCursor:
         return []
 
     def close(self):
-        pass
+        self.closed = True
 
 
 def patch_db(monkeypatch):
     cursor = FakeCursor()
     connection = FakeConnection()
-
-    @contextmanager
-    def fake_db():
-        yield cursor, connection
-
-    monkeypatch.setattr(operations, "db", fake_db)
+    connection.cursor_result = cursor
+    monkeypatch.setattr(operations.iris.dbapi, "connect", lambda: connection)
     return cursor, connection
 
 
@@ -91,9 +94,9 @@ def test_service_poll_creates_lock_and_sends_once(tmp_path):
     assert isinstance(sent[0][1], GaiaBenchmarkRequest)
 
 
-def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path, monkeypatch):
-    cursor, connection = patch_db(monkeypatch)
+def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path):
     process = configure(GaiaBenchmarkProcess(), tmp_path, boundaries="000000,000002,000005")
+    process.PrepareOperation = "prepare"
     process.DownloadOperation = "download"
     process.ImportOperation = "import"
     process.ComputeOperation = "compute"
@@ -103,6 +106,8 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path,
 
     def send_request_sync(target, request, timeout=-1, description=None):
         sync_calls.append((target, request, timeout))
+        if target == "prepare":
+            return PrepareRunResult(request.run_name)
         if target == "compute":
             return ComputeResult(request.run_name, 2, "")
         if target == "export":
@@ -132,12 +137,10 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path,
     result = process.on_message(GaiaBenchmarkRequest("run-1"))
 
     assert result == ComputeResult("run-1", 2, "output/results.csv")
-    assert [call[0] for call in sync_calls] == ["compute", "export"]
-    assert [type(call[1]) for call in sync_calls] == [GaiaBenchmarkRequest, ComputeResult]
-    assert [call[2] for call in sync_calls] == [99, 99]
+    assert [call[0] for call in sync_calls] == ["prepare", "compute", "export"]
+    assert [type(call[1]) for call in sync_calls] == [GaiaBenchmarkRequest, GaiaBenchmarkRequest, ComputeResult]
+    assert [call[2] for call in sync_calls] == [99, 99, 99]
     assert [len(call[0]) for call in multi_calls] == [2, 2]
-    assert [params for _sql, params in cursor.executed] == [("run-1",), ("run-1",)]
-    assert connection.commit_count == 1
     assert process.done_file.exists()
     assert not process.error_file.exists()
     download_requests = [request for _target, request in multi_calls[0][0]]
@@ -147,12 +150,16 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path,
     assert import_requests[0].local_path == "/tmp/000000-000001.csv.gz"
 
 
-def test_process_marks_run_failed_when_downstream_call_fails(tmp_path, monkeypatch):
-    cursor, connection = patch_db(monkeypatch)
+def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
     process = configure(GaiaBenchmarkProcess(), tmp_path)
+    process.PrepareOperation = "prepare"
     process.DownloadOperation = "download"
+    sync_calls = []
 
-    def send_request_sync(*_args, **_kwargs):
+    def send_request_sync(target, request, timeout=-1, description=None):
+        sync_calls.append((target, request, timeout))
+        if target == "prepare":
+            return PrepareRunResult(request.run_name)
         raise AssertionError("compute/export should not be called")
 
     def send_multi_request_sync(target_requests, timeout=-1, description=None):
@@ -167,34 +174,38 @@ def test_process_marks_run_failed_when_downstream_call_fails(tmp_path, monkeypat
 
     assert "failed with status 0" in process.error_file.read_text(encoding="utf-8")
     assert not process.done_file.exists()
-    assert [params for _sql, params in cursor.executed] == [("run-2",), ("run-2",)]
-    assert connection.commit_count == 1
+    assert [call[0] for call in sync_calls] == ["prepare"]
 
 
-def test_process_prepare_clears_markers_and_persistent_rows(tmp_path, monkeypatch):
+def test_prepare_operation_clears_markers_and_persistent_rows(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
-    process = configure(GaiaBenchmarkProcess(), tmp_path, boundaries="000000,000002")
+    operation = configure(GaiaPrepareRunOperation(), tmp_path, boundaries="000000,000002")
+    operation.on_init()
     for path in (
-        process.done_file,
-        process.error_file,
-        process.results_file,
-        process.results_file.with_suffix(".csv.tmp"),
+        operation.done_file,
+        operation.error_file,
+        operation.results_file,
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("stale", encoding="utf-8")
 
-    process._prepare("run-3")
+    result = operation.on_message(GaiaBenchmarkRequest("run-3"))
 
-    assert not process.done_file.exists()
-    assert not process.error_file.exists()
-    assert not process.results_file.exists()
+    assert result == PrepareRunResult("run-3")
+    assert not operation.done_file.exists()
+    assert not operation.error_file.exists()
+    assert not operation.results_file.exists()
     assert [params for _sql, params in cursor.executed] == [("run-3",), ("run-3",)]
     assert connection.commit_count == 1
+    operation.on_tear_down()
+    assert cursor.closed
+    assert connection.closed
 
 
 def test_import_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
     operation = configure(GaiaImportOperation(), tmp_path)
+    operation.on_init()
     input_file = tmp_path / "input.csv.gz"
     rows = [
         [f"h{i}" for i in range(17)],
@@ -216,12 +227,16 @@ def test_import_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monke
         ("run-4", "000000-003111", 42, 5.0, 10.0, 3.0, 9.0),
         ("run-4", "000000-003111", 44, 7.0, 7.0, 1.0, 2.0),
     ]
+    operation.on_tear_down()
+    assert cursor.closed
+    assert connection.closed
 
 
 def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
     operation = configure(GaiaDownloadOperation(), tmp_path)
     payload = gzip.compress(b"hello")
     calls = []
+    session_closed = []
 
     class Response:
         def __enter__(self):
@@ -233,16 +248,18 @@ def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
         def raise_for_status(self):
             pass
 
-        def iter_content(self, chunk_size):
-            calls.append(chunk_size)
-            yield payload[:2]
-            yield payload[2:]
+        raw = io.BytesIO(payload)
 
-    def get(url, stream, timeout):
-        calls.append((url, stream, timeout))
-        return Response()
+    class Session:
+        def get(self, url, stream, timeout):
+            calls.append((url, stream, timeout))
+            return Response()
 
-    monkeypatch.setattr(operations.requests, "get", get)
+        def close(self):
+            session_closed.append(True)
+
+    monkeypatch.setattr(operations.requests, "Session", Session)
+    operation.on_init()
 
     result = operation.on_message(
         FileRequest(
@@ -256,17 +273,39 @@ def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
     assert result == FileResult("run-5", "000000-003111", result.local_path)
     assert calls == [
         ("https://example.invalid/EpochPhotometry_000000-003111.csv.gz", True, 7),
-        operations.DOWNLOAD_CHUNK_SIZE,
     ]
+    operation.on_tear_down()
+    assert session_closed == [True]
+
+
+def test_compute_operation_uses_lifecycle_db_connection(tmp_path, monkeypatch):
+    cursor, connection = patch_db(monkeypatch)
+    cursor.fetchone_result = (2,)
+    operation = configure(GaiaComputeOperation(), tmp_path)
+    operation.on_init()
+
+    result = operation.on_message(GaiaBenchmarkRequest("run-6"))
+
+    assert result == ComputeResult("run-6", 2, "")
+    assert [params for _sql, params in cursor.executed] == [
+        ("run-6",),
+        ("run-6", "run-6"),
+        ("run-6",),
+    ]
+    assert connection.commit_count == 1
+    operation.on_tear_down()
+    assert cursor.closed
+    assert connection.closed
 
 
 def test_csv_export_operation_writes_results_file(tmp_path, monkeypatch):
-    cursor, _connection = patch_db(monkeypatch)
+    cursor, connection = patch_db(monkeypatch)
     cursor.fetchmany_results = [
         [(1, 2.0, 3.0, 4.0, 5.0, 150.0)],
         [(2, 6.0, 7.0, 8.0, 9.0, 175.0)],
     ]
     operation = configure(GaiaCsvExportOperation(), tmp_path)
+    operation.on_init()
 
     result = operation.on_message(ComputeResult("run-6", 2, ""))
 
@@ -276,3 +315,6 @@ def test_csv_export_operation_writes_results_file(tmp_path, monkeypatch):
         "1,2.0,3.0,4.0,5.0,150.0",
         "2,6.0,7.0,8.0,9.0,175.0",
     ]
+    operation.on_tear_down()
+    assert cursor.closed
+    assert connection.closed

@@ -10,6 +10,7 @@ from src.python.gaia.messages import (
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
+    PrepareRunResult,
 )
 from src.python.gaia.models import (
     PERSISTENT_MODEL_SPECS,
@@ -19,6 +20,7 @@ from src.python.gaia.models import (
 
 MESSAGE_TYPES = [
     GaiaBenchmarkRequest,
+    PrepareRunResult,
     FileRequest,
     FileResult,
     ComputeResult,

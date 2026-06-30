@@ -10,6 +10,7 @@ from .operations import (
     GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
+    GaiaPrepareRunOperation,
 )
 from .processes import GaiaBenchmarkProcess
 from .services import GaiaBenchmarkService
@@ -45,6 +46,11 @@ def build_production(
     )
 
     # Business Operations: isolate side effects and heavy work
+    prepare = prod.operation(
+        "GaiaPrepareRunOperation",
+        GaiaPrepareRunOperation,
+        settings=gaia_settings,
+    )
     download = prod.operation(
         "GaiaDownloadOperation",
         GaiaDownloadOperation,
@@ -70,6 +76,7 @@ def build_production(
 
     # Routes: messages flow Service -> Process -> Operations
     service.connect(GaiaBenchmarkService.Output, process)
+    process.connect(GaiaBenchmarkProcess.PrepareOperation, prepare)
     process.connect(GaiaBenchmarkProcess.DownloadOperation, download)
     process.connect(GaiaBenchmarkProcess.ImportOperation, import_)
     process.connect(GaiaBenchmarkProcess.ComputeOperation, compute)

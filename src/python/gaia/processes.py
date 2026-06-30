@@ -4,11 +4,11 @@ from iop import BusinessProcess, target
 
 from typing import TypeVar
 
-from . import operations
 from .messages import (
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
+    PrepareRunResult,
 )
 from .runtime import GaiaSettings
 
@@ -17,6 +17,7 @@ T = TypeVar("T")
 class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
 
     # Targets for sending messages to Business Operations declared in production.py
+    PrepareOperation = target()
     DownloadOperation = target()
     ImportOperation = target()
     ComputeOperation = target()
@@ -25,7 +26,13 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
     def on_message(self, request: GaiaBenchmarkRequest):
         try:
             # Start from a clean run: remove old markers and rows for this run name
-            self._prepare(request.run_name)
+            result = self.send_request_sync(
+                self.PrepareOperation,
+                request,
+                timeout=self.request_timeout,
+            )
+            if not isinstance(result, PrepareRunResult):
+                raise TypeError(f"Unexpected prepare response: {type(result).__name__}")
 
             # Download the 20 Gaia files in parallel
             downloads = self._send_parallel(
@@ -66,6 +73,7 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
             # Write the success marker watched by RunChallenge.sh
             self._complete()
             return result
+
         except Exception as error:
             # Write the failure marker watched by RunChallenge.sh, then keep the IoP error visible
             self._fail(repr(error))
@@ -99,24 +107,6 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
                 )
             results.append(response)
         return results
-
-    def _prepare(self, run_name: str) -> None:
-        # Files are used as simple run markers for the challenge script
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.download_dir.mkdir(parents=True, exist_ok=True)
-        for marker in (
-            self.done_file,
-            self.error_file,
-            self.results_file,
-            self.results_file.with_suffix(".csv.tmp"),
-        ):
-            marker.unlink(missing_ok=True)
-
-        # Persistent rows are scoped by run_name, so deleting the current run is repeatable
-        with operations.db() as (cursor, connection):
-            for table in (operations.SOURCE_TABLE, operations.CHANGE_TABLE):
-                cursor.execute(f"DELETE FROM {table} WHERE run_name = ?", (run_name,))
-            connection.commit()
 
     def _complete(self) -> None:
         self.error_file.unlink(missing_ok=True)
