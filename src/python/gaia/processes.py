@@ -21,6 +21,7 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
     DownloadOperation = target()
     ImportOperation = target()
     ComputeOperation = target()
+    ExportOperation = target()
 
     def on_message(self, request: GaiaBenchmarkRequest):
         try:
@@ -54,6 +55,13 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
             )
             if not isinstance(result, ComputeResult):
                 raise TypeError(f"Unexpected compute response: {type(result).__name__}")
+            result = self.send_request_sync(
+                self.ExportOperation,
+                result,
+                timeout=self.request_timeout,
+            )
+            if not isinstance(result, ComputeResult):
+                raise TypeError(f"Unexpected export response: {type(result).__name__}")
             self.send_request_sync(
                 self.RunStateOperation,
                 StateRequest(

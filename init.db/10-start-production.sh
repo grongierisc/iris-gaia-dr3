@@ -3,7 +3,6 @@ set -e
 cd /irisdev/app
 iop --init
 PYTHONPATH=/irisdev/app iris-persistence apply \
-  src.python.gaia.models:DownloadFile \
   src.python.gaia.models:SourceFluxAggregate \
   src.python.gaia.models:PhotometryChange \
   --to gaia-dr3-persistence-v1 \

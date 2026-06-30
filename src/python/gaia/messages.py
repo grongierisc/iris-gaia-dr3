@@ -32,9 +32,6 @@ class FileResult(Message):
     run_name: str
     file_range: str
     local_path: str = ""
-    size_bytes: int = 0
-    sha256: str = ""
-    count: int = 0
 
 
 @dataclass

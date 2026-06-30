@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from typing import Annotated
+
 from pathlib import Path
 
 from iop import Setting
 
 
 class GaiaSettings:
-    ArchiveUrlTemplate: str = Setting(data_type=str, required=True)
-    FileBoundaries: str = Setting(data_type=str, required=True)
-    OutputDir: str = Setting(data_type=str, required=True)
-    RequestTimeoutSeconds: int = Setting(data_type=int, required=True)
-    HttpTimeoutSeconds: int = Setting(data_type=int, required=True)
-    DbBatchSize: int = Setting(data_type=int, required=True)
-    DownloadChunkSize: int = Setting(data_type=int, required=True)
+    ArchiveUrlTemplate: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    FileBoundaries: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    OutputDir: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    RequestTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+    HttpTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+    DbBatchSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+    DownloadChunkSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
 
     @property
     def output_dir(self) -> Path:

@@ -7,6 +7,7 @@ from iop import Production
 
 from .operations import (
     GaiaComputeOperation,
+    GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
     GaiaRunStateOperation,
@@ -60,10 +61,16 @@ def build_production(
         GaiaComputeOperation,
         settings=gaia_settings,
     )
+    export = prod.operation(
+        "GaiaCsvExportOperation",
+        GaiaCsvExportOperation,
+        settings=gaia_settings,
+    )
 
     service.connect(GaiaBenchmarkService.Output, process)
     process.connect(GaiaBenchmarkProcess.RunStateOperation, run_state)
     process.connect(GaiaBenchmarkProcess.DownloadOperation, download)
     process.connect(GaiaBenchmarkProcess.ImportOperation, import_)
     process.connect(GaiaBenchmarkProcess.ComputeOperation, compute)
+    process.connect(GaiaBenchmarkProcess.ExportOperation, export)
     return prod

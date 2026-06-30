@@ -13,7 +13,6 @@ from src.python.gaia.messages import (
     StateRequest,
 )
 from src.python.gaia.models import (
-    DownloadFile,
     PERSISTENT_MODEL_SPECS,
     PhotometryChange,
     SourceFluxAggregate,
@@ -64,11 +63,9 @@ def test_state_message_carries_actions_without_extra_message_types():
 
 
 def test_persistent_models_use_expected_iris_class_names():
-    assert DownloadFile._classname == "GaiaDR3.DownloadFile"
     assert SourceFluxAggregate._classname == "GaiaDR3.SourceFluxAggregate"
     assert PhotometryChange._classname == "GaiaDR3.PhotometryChange"
     assert PERSISTENT_MODEL_SPECS == [
-        "src.python.gaia.models:DownloadFile",
         "src.python.gaia.models:SourceFluxAggregate",
         "src.python.gaia.models:PhotometryChange",
     ]
