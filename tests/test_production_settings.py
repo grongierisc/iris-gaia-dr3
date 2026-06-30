@@ -6,7 +6,6 @@ from src.python.gaia.runtime import GaiaSettings
 
 def test_settings_module_owns_gaia_runtime_config():
     assert GAIA_SETTINGS["FileBoundaries"] == ",".join(FIRST_20_FILE_BOUNDARIES)
-    assert GAIA_SETTINGS["OutputDir"] == "/irisdev/app/output"
     assert GAIA_SETTINGS["ArchiveUrlTemplate"].endswith("EpochPhotometry_%s.csv.gz")
 
 

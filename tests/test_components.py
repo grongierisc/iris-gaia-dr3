@@ -7,12 +7,11 @@ from contextlib import contextmanager
 import pytest
 
 from src.python.gaia import operations
-from src.python.gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, StateRequest
+from src.python.gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest
 from src.python.gaia.operations import (
     GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
-    GaiaRunStateOperation,
 )
 from src.python.gaia.processes import GaiaBenchmarkProcess
 from src.python.gaia.services import GaiaBenchmarkService
@@ -92,9 +91,9 @@ def test_service_poll_creates_lock_and_sends_once(tmp_path):
     assert isinstance(sent[0][1], GaiaBenchmarkRequest)
 
 
-def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path):
+def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path, monkeypatch):
+    cursor, connection = patch_db(monkeypatch)
     process = configure(GaiaBenchmarkProcess(), tmp_path, boundaries="000000,000002,000005")
-    process.RunStateOperation = "state"
     process.DownloadOperation = "download"
     process.ImportOperation = "import"
     process.ComputeOperation = "compute"
@@ -133,19 +132,14 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path)
     result = process.on_message(GaiaBenchmarkRequest("run-1"))
 
     assert result == ComputeResult("run-1", 2, "output/results.csv")
-    assert [type(call[1]) for call in sync_calls] == [
-        StateRequest,
-        StateRequest,
-        ComputeResult,
-        StateRequest,
-    ]
-    assert [call[2] for call in sync_calls] == [99, 99, 99, 99]
-    assert [sync_calls[0][1].action, sync_calls[1][1].action, sync_calls[3][1].action] == [
-        "prepare",
-        "compute",
-        "complete",
-    ]
+    assert [call[0] for call in sync_calls] == ["compute", "export"]
+    assert [type(call[1]) for call in sync_calls] == [GaiaBenchmarkRequest, ComputeResult]
+    assert [call[2] for call in sync_calls] == [99, 99]
     assert [len(call[0]) for call in multi_calls] == [2, 2]
+    assert [params for _sql, params in cursor.executed] == [("run-1",), ("run-1",)]
+    assert connection.commit_count == 1
+    assert process.done_file.exists()
+    assert not process.error_file.exists()
     download_requests = [request for _target, request in multi_calls[0][0]]
     assert [request.file_range for request in download_requests] == ["000000-000001", "000002-000004"]
     assert download_requests[0].url.endswith("EpochPhotometry_000000-000001.csv.gz")
@@ -153,16 +147,13 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path)
     assert import_requests[0].local_path == "/tmp/000000-000001.csv.gz"
 
 
-def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
+def test_process_marks_run_failed_when_downstream_call_fails(tmp_path, monkeypatch):
+    cursor, connection = patch_db(monkeypatch)
     process = configure(GaiaBenchmarkProcess(), tmp_path)
-    process.RunStateOperation = "state"
     process.DownloadOperation = "download"
-    process.ComputeOperation = "compute"
-    state_actions = []
 
-    def send_request_sync(_target, request, timeout=-1, description=None):
-        state_actions.append(request.action)
-        return request
+    def send_request_sync(*_args, **_kwargs):
+        raise AssertionError("compute/export should not be called")
 
     def send_multi_request_sync(target_requests, timeout=-1, description=None):
         target, request = target_requests[0]
@@ -174,27 +165,29 @@ def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
     with pytest.raises(RuntimeError):
         process.on_message(GaiaBenchmarkRequest("run-2"))
 
-    assert state_actions == ["prepare", "failed"]
+    assert "failed with status 0" in process.error_file.read_text(encoding="utf-8")
+    assert not process.done_file.exists()
+    assert [params for _sql, params in cursor.executed] == [("run-2",), ("run-2",)]
+    assert connection.commit_count == 1
 
 
-def test_run_state_prepare_clears_markers_and_persistent_rows(tmp_path, monkeypatch):
+def test_process_prepare_clears_markers_and_persistent_rows(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
-    operation = configure(GaiaRunStateOperation(), tmp_path, boundaries="000000,000002")
+    process = configure(GaiaBenchmarkProcess(), tmp_path, boundaries="000000,000002")
     for path in (
-        operation.done_file,
-        operation.error_file,
-        operation.results_file,
-        operation.results_file.with_suffix(".csv.tmp"),
+        process.done_file,
+        process.error_file,
+        process.results_file,
+        process.results_file.with_suffix(".csv.tmp"),
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("stale", encoding="utf-8")
 
-    result = operation.on_message(StateRequest("run-3", "prepare"))
+    process._prepare("run-3")
 
-    assert result.action == "prepare"
-    assert not operation.done_file.exists()
-    assert not operation.error_file.exists()
-    assert not operation.results_file.exists()
+    assert not process.done_file.exists()
+    assert not process.error_file.exists()
+    assert not process.results_file.exists()
     assert [params for _sql, params in cursor.executed] == [("run-3",), ("run-3",)]
     assert connection.commit_count == 1
 

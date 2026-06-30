@@ -83,8 +83,7 @@ The application is an IoP production declared in [settings.py](settings.py) and 
 Business roles:
 
 - `GaiaBenchmarkService`: polling entrypoint. It starts one benchmark run when neither `results.done` nor `results.err` exists.
-- `GaiaBenchmarkProcess`: orchestrates the workflow.
-- `GaiaRunStateOperation`: prepares run state and writes success/failure markers.
+- `GaiaBenchmarkProcess`: orchestrates the workflow, prepares run state, and writes success/failure markers.
 - `GaiaDownloadOperation`: downloads or reuses one local gzip file per request.
 - `GaiaImportOperation`: imports one gzip file per request and writes per-file source aggregates in DBAPI batches.
 - `GaiaComputeOperation`: aggregates persisted per-file rows into final qualifying `PhotometryChange` rows.
@@ -105,19 +104,16 @@ flowchart LR
   end
   subgraph group_operation["Operations"]
     direction TB
-    node_GaiaRunStateOperation["GaiaRunStateOperation<br/>Python.src.python.gaia.operations.GaiaRunStateOperation"]
     node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.src.python.gaia.operations.GaiaDownloadOperation"]
     node_GaiaImportOperation["GaiaImportOperation<br/>Python.src.python.gaia.operations.GaiaImportOperation"]
     node_GaiaComputeOperation["GaiaComputeOperation<br/>Python.src.python.gaia.operations.GaiaComputeOperation"]
     node_GaiaCsvExportOperation["GaiaCsvExportOperation<br/>Python.src.python.gaia.operations.GaiaCsvExportOperation"]
   end
   node_GaiaBenchmarkService ~~~ node_GaiaBenchmarkProcess
-  node_GaiaBenchmarkProcess ~~~ node_GaiaRunStateOperation
   node_GaiaBenchmarkProcess -- "ComputeOperation" --> node_GaiaComputeOperation
   node_GaiaBenchmarkProcess -- "DownloadOperation" --> node_GaiaDownloadOperation
   node_GaiaBenchmarkProcess -- "ExportOperation" --> node_GaiaCsvExportOperation
   node_GaiaBenchmarkProcess -- "ImportOperation" --> node_GaiaImportOperation
-  node_GaiaBenchmarkProcess -- "RunStateOperation" --> node_GaiaRunStateOperation
   node_GaiaBenchmarkService -- "Output" --> node_GaiaBenchmarkProcess
 ```
 
@@ -125,16 +121,16 @@ flowchart LR
 
 1. `GaiaBenchmarkService` polls once per second.
 2. It creates `output/results.lock` and sends a `GaiaBenchmarkRequest` to the process.
-3. `GaiaBenchmarkProcess` calls `GaiaRunStateOperation` to clear prior persistent rows and output markers.
+3. `GaiaBenchmarkProcess` clears prior persistent rows and output markers.
 4. The process fans out 20 download requests to `GaiaDownloadOperation`.
 5. Downloads are stored in `output/downloads/`. Existing readable gzip files are reused.
 6. The process fans out 20 import requests to `GaiaImportOperation`.
 7. Each import request parses one gzip file, computes per-row BP/RP min/max values, and inserts aggregate rows with `executemany`.
 8. `GaiaComputeOperation` uses SQL to combine all per-file aggregates by `source_id`, calculate percentage change, and persist only results over 100 percent.
 9. `GaiaCsvExportOperation` writes final rows ordered by `source_id` to `output/results.csv`.
-10. `GaiaRunStateOperation` writes `output/results.done`.
+10. The process writes `output/results.done`.
 
-If any step fails, the process asks `GaiaRunStateOperation` to write `output/results.err`, then re-raises the failure.
+If any step fails, the process writes `output/results.err`, then re-raises the failure.
 
 ## Persistent Data
 

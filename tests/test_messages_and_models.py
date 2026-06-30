@@ -10,7 +10,6 @@ from src.python.gaia.messages import (
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
-    StateRequest,
 )
 from src.python.gaia.models import (
     PERSISTENT_MODEL_SPECS,
@@ -20,7 +19,6 @@ from src.python.gaia.models import (
 
 MESSAGE_TYPES = [
     GaiaBenchmarkRequest,
-    StateRequest,
     FileRequest,
     FileResult,
     ComputeResult,
@@ -53,13 +51,6 @@ def test_message_construction_uses_primitive_values():
     assert request.run_name == "gaia-dr3-first-20"
     assert request.file_range == "000000-003111"
     assert request.url.endswith(".csv.gz")
-
-
-def test_state_message_carries_actions_without_extra_message_types():
-    request = StateRequest("gaia-dr3-first-20", "failed", error_message="boom")
-
-    assert request.action == "failed"
-    assert request.error_message == "boom"
 
 
 def test_persistent_models_use_expected_iris_class_names():

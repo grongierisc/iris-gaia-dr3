@@ -10,7 +10,6 @@ from .operations import (
     GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
-    GaiaRunStateOperation,
 )
 from .processes import GaiaBenchmarkProcess
 from .services import GaiaBenchmarkService
@@ -23,27 +22,29 @@ def build_production(
     download_pool_size: int,
     import_pool_size: int,
 ) -> Production:
+    # The Production object is the IoP message graph
     prod = Production(
         "GaiaDR3.Production",
         testing_enabled=True,
         actor_pool_size=actor_pool_size,
     )
+
+    # Business Service: starts the benchmark
     service = prod.service(
         "GaiaBenchmarkService",
         GaiaBenchmarkService,
         settings=gaia_settings,
         adapter_settings={"CallInterval": 1},
     )
+
+    # Business Process: orchestrates the whole workflow
     process = prod.process(
         "GaiaBenchmarkProcess",
         GaiaBenchmarkProcess,
         settings=gaia_settings,
     )
-    run_state = prod.operation(
-        "GaiaRunStateOperation",
-        GaiaRunStateOperation,
-        settings=gaia_settings,
-    )
+
+    # Business Operations: isolate side effects and heavy work
     download = prod.operation(
         "GaiaDownloadOperation",
         GaiaDownloadOperation,
@@ -67,8 +68,8 @@ def build_production(
         settings=gaia_settings,
     )
 
+    # Routes: messages flow Service -> Process -> Operations
     service.connect(GaiaBenchmarkService.Output, process)
-    process.connect(GaiaBenchmarkProcess.RunStateOperation, run_state)
     process.connect(GaiaBenchmarkProcess.DownloadOperation, download)
     process.connect(GaiaBenchmarkProcess.ImportOperation, import_)
     process.connect(GaiaBenchmarkProcess.ComputeOperation, compute)

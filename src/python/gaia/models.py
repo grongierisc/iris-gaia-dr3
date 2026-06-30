@@ -16,7 +16,6 @@ class SourceFluxAggregate(Model):
 
     class Meta:
         classname = "GaiaDR3.SourceFluxAggregate"
-        validate_on_init = False
         indexes = [
             Index("SourceAggregateRunIdx", properties="run_name"),
             Index("SourceAggregateSourceIdx", properties="run_name,source_id"),
@@ -34,7 +33,6 @@ class PhotometryChange(Model):
 
     class Meta:
         classname = "GaiaDR3.PhotometryChange"
-        validate_on_init = False
         indexes = [
             Index("PhotometryChangeRunIdx", properties="run_name"),
             Index("PhotometryChangeSourceIdx", properties="run_name,source_id"),

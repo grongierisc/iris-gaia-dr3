@@ -5,18 +5,10 @@ from dataclasses import dataclass
 from iop import Message
 
 
+# IoP components exchange small dataclass messages with primitive fields
 @dataclass
 class GaiaBenchmarkRequest(Message):
     run_name: str = "gaia-dr3-first-20"
-
-
-@dataclass
-class StateRequest(Message):
-    run_name: str
-    action: str
-    error_message: str = ""
-    results_file: str = ""
-    result_count: int = 0
 
 
 @dataclass

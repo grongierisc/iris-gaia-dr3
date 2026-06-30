@@ -4,13 +4,13 @@ from typing import Annotated
 
 from pathlib import Path
 
-from iop import Setting
+from iop import Setting, controls
 
 
 class GaiaSettings:
     ArchiveUrlTemplate: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
     FileBoundaries: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
-    OutputDir: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    OutputDir: Annotated[str, Setting(data_type=str, required=True, category="Gaia", control=controls.directory())]
     RequestTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
     HttpTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
     DbBatchSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
