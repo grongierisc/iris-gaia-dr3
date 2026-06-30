@@ -78,7 +78,7 @@ docker compose up --build
 
 ## Architecture
 
-The application is an IoP production declared in [settings.py](settings.py) and [src/python/gaia/production.py](src/python/gaia/production.py).
+The application is an IoP production declared in [settings.py](settings.py) and [gaia/production.py](gaia/production.py).
 
 Business roles:
 
@@ -97,19 +97,19 @@ flowchart LR
   %% Production: GaiaDR3.Production
   subgraph group_service["Services"]
     direction TB
-    node_GaiaBenchmarkService["GaiaBenchmarkService<br/>Python.src.python.gaia.services.GaiaBenchmarkService"]
+    node_GaiaBenchmarkService["GaiaBenchmarkService<br/>Python.gaia.services.GaiaBenchmarkService"]
   end
   subgraph group_process["Processes"]
     direction TB
-    node_GaiaBenchmarkProcess["GaiaBenchmarkProcess<br/>Python.src.python.gaia.processes.GaiaBenchmarkProcess"]
+    node_GaiaBenchmarkProcess["GaiaBenchmarkProcess<br/>Python.gaia.processes.GaiaBenchmarkProcess"]
   end
   subgraph group_operation["Operations"]
     direction TB
-    node_GaiaPrepareRunOperation["GaiaPrepareRunOperation<br/>Python.src.python.gaia.operations.GaiaPrepareRunOperation"]
-    node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.src.python.gaia.operations.GaiaDownloadOperation"]
-    node_GaiaImportOperation["GaiaImportOperation<br/>Python.src.python.gaia.operations.GaiaImportOperation"]
-    node_GaiaComputeOperation["GaiaComputeOperation<br/>Python.src.python.gaia.operations.GaiaComputeOperation"]
-    node_GaiaCsvExportOperation["GaiaCsvExportOperation<br/>Python.src.python.gaia.operations.GaiaCsvExportOperation"]
+    node_GaiaPrepareRunOperation["GaiaPrepareRunOperation<br/>Python.gaia.operations.GaiaPrepareRunOperation"]
+    node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.gaia.operations.GaiaDownloadOperation"]
+    node_GaiaImportOperation["GaiaImportOperation<br/>Python.gaia.operations.GaiaImportOperation"]
+    node_GaiaComputeOperation["GaiaComputeOperation<br/>Python.gaia.operations.GaiaComputeOperation"]
+    node_GaiaCsvExportOperation["GaiaCsvExportOperation<br/>Python.gaia.operations.GaiaCsvExportOperation"]
   end
   node_GaiaBenchmarkService ~~~ node_GaiaBenchmarkProcess
   node_GaiaBenchmarkProcess -- "ComputeOperation" --> node_GaiaComputeOperation
@@ -284,7 +284,7 @@ Fast local checks:
 
 ```bash
 .venv/bin/python -m pytest
-.venv/bin/python -m compileall -q src tests settings.py
+.venv/bin/python -m compileall -q gaia tests settings.py
 .venv/bin/iop --migrate settings.py --dry-run
 ```
 

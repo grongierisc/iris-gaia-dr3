@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import gzip
 
-from src.python.gaia.parsing import (
+from gaia.parsing import (
     aggregate_source_flux,
     max_percentage_change,
     min_max,

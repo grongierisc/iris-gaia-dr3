@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from src.python.gaia.production import build_production
+from gaia.production import build_production
 
 ARCHIVE_URL_TEMPLATE = (
     "https://cdn.gea.esac.esa.int/Gaia/gdr3/Photometry/epoch_photometry/"

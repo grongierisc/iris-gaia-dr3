@@ -5,14 +5,14 @@ from typing import get_type_hints
 
 from iop import Message
 
-from src.python.gaia.messages import (
+from gaia.messages import (
     ComputeResult,
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
     PrepareRunResult,
 )
-from src.python.gaia.models import (
+from gaia.models import (
     PERSISTENT_MODEL_SPECS,
     PhotometryChange,
     SourceFluxAggregate,
@@ -59,6 +59,6 @@ def test_persistent_models_use_expected_iris_class_names():
     assert SourceFluxAggregate._classname == "GaiaDR3.SourceFluxAggregate"
     assert PhotometryChange._classname == "GaiaDR3.PhotometryChange"
     assert PERSISTENT_MODEL_SPECS == [
-        "src.python.gaia.models:SourceFluxAggregate",
-        "src.python.gaia.models:PhotometryChange",
+        "gaia.models:SourceFluxAggregate",
+        "gaia.models:PhotometryChange",
     ]

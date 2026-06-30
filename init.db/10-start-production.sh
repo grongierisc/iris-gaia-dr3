@@ -3,8 +3,8 @@ set -e
 cd /irisdev/app
 iop --init
 PYTHONPATH=/irisdev/app iris-persistence apply \
-  src.python.gaia.models:SourceFluxAggregate \
-  src.python.gaia.models:PhotometryChange \
+  gaia.models:SourceFluxAggregate \
+  gaia.models:PhotometryChange \
   --to gaia-dr3-persistence-v1 \
   --yes
 iop --migrate settings.py

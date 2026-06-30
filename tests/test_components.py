@@ -6,17 +6,17 @@ import io
 
 import pytest
 
-from src.python.gaia import operations
-from src.python.gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, PrepareRunResult
-from src.python.gaia.operations import (
+from gaia import operations
+from gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, PrepareRunResult
+from gaia.operations import (
     GaiaComputeOperation,
     GaiaCsvExportOperation,
     GaiaDownloadOperation,
     GaiaImportOperation,
     GaiaPrepareRunOperation,
 )
-from src.python.gaia.processes import GaiaBenchmarkProcess
-from src.python.gaia.services import GaiaBenchmarkService
+from gaia.processes import GaiaBenchmarkProcess
+from gaia.services import GaiaBenchmarkService
 
 
 def configure(component, tmp_path, *, boundaries: str = "000000,003112,005264"):

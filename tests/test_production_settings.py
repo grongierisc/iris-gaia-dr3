@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from settings import FIRST_20_FILE_BOUNDARIES, GAIA_SETTINGS, PRODUCTIONS
-from src.python.gaia.runtime import GaiaSettings
+from gaia.runtime import GaiaSettings
 
 
 def test_settings_module_owns_gaia_runtime_config():

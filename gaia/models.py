@@ -40,6 +40,6 @@ class PhotometryChange(Model):
 
 
 PERSISTENT_MODEL_SPECS = [
-    "src.python.gaia.models:SourceFluxAggregate",
-    "src.python.gaia.models:PhotometryChange",
+    "gaia.models:SourceFluxAggregate",
+    "gaia.models:PhotometryChange",
 ]
