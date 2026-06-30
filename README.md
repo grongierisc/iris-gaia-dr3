@@ -84,11 +84,9 @@ Business roles:
 
 - `GaiaBenchmarkService`: polling entrypoint. It starts one benchmark run when neither `results.done` nor `results.err` exists.
 - `GaiaBenchmarkProcess`: orchestrates the workflow and writes success/failure markers.
-- `GaiaPrepareRunOperation`: clears old output markers and persistent rows for one run.
 - `GaiaDownloadOperation`: downloads or reuses one local gzip file per request.
-- `GaiaImportOperation`: imports one gzip file per request and writes per-file source aggregates in DBAPI batches.
-- `GaiaComputeOperation`: aggregates persisted per-file rows into final qualifying `PhotometryChange` rows.
-- `GaiaCsvExportOperation`: exports final rows to `output/results.csv`.
+- `GaiaDbOperation`: owns the IRIS DBAPI connection lifecycle and routes DB work by message type:
+  prepare run, import aggregate rows, compute final rows, and export the CSV.
 
 IoP Mermaid graph generated from the production object:
 
@@ -105,18 +103,15 @@ flowchart LR
   end
   subgraph group_operation["Operations"]
     direction TB
-    node_GaiaPrepareRunOperation["GaiaPrepareRunOperation<br/>Python.gaia.operations.GaiaPrepareRunOperation"]
     node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.gaia.operations.GaiaDownloadOperation"]
-    node_GaiaImportOperation["GaiaImportOperation<br/>Python.gaia.operations.GaiaImportOperation"]
-    node_GaiaComputeOperation["GaiaComputeOperation<br/>Python.gaia.operations.GaiaComputeOperation"]
-    node_GaiaCsvExportOperation["GaiaCsvExportOperation<br/>Python.gaia.operations.GaiaCsvExportOperation"]
+    node_GaiaDbOperation["GaiaDbOperation<br/>Python.gaia.operations.GaiaDbOperation"]
   end
   node_GaiaBenchmarkService ~~~ node_GaiaBenchmarkProcess
-  node_GaiaBenchmarkProcess -- "ComputeOperation" --> node_GaiaComputeOperation
+  node_GaiaBenchmarkProcess -- "ComputeOperation" --> node_GaiaDbOperation
   node_GaiaBenchmarkProcess -- "DownloadOperation" --> node_GaiaDownloadOperation
-  node_GaiaBenchmarkProcess -- "ExportOperation" --> node_GaiaCsvExportOperation
-  node_GaiaBenchmarkProcess -- "ImportOperation" --> node_GaiaImportOperation
-  node_GaiaBenchmarkProcess -- "PrepareOperation" --> node_GaiaPrepareRunOperation
+  node_GaiaBenchmarkProcess -- "ExportOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkProcess -- "ImportOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkProcess -- "PrepareOperation" --> node_GaiaDbOperation
   node_GaiaBenchmarkService -- "Output" --> node_GaiaBenchmarkProcess
 ```
 
@@ -124,13 +119,13 @@ flowchart LR
 
 1. `GaiaBenchmarkService` polls once per second.
 2. It creates `output/results.lock` and sends a `GaiaBenchmarkRequest` to the process.
-3. `GaiaBenchmarkProcess` asks `GaiaPrepareRunOperation` to clear prior persistent rows and output markers.
+3. `GaiaBenchmarkProcess` sends `PrepareRunRequest` to `GaiaDbOperation` to clear prior persistent rows and output markers.
 4. The process fans out 20 download requests to `GaiaDownloadOperation`.
 5. Downloads are stored in `output/downloads/`. Existing readable gzip files are reused.
-6. The process fans out 20 import requests to `GaiaImportOperation`.
+6. The process fans out 20 `FileRequest` import messages to `GaiaDbOperation`.
 7. Each import request parses one gzip file, computes per-row BP/RP min/max values, and inserts aggregate rows with `executemany`.
-8. `GaiaComputeOperation` uses SQL to combine all per-file aggregates by `source_id`, calculate percentage change, and persist only results over 100 percent.
-9. `GaiaCsvExportOperation` writes final rows ordered by `source_id` to `output/results.csv`.
+8. `GaiaDbOperation` handles `ComputeRequest` with SQL to combine all per-file aggregates by `source_id`, calculate percentage change, and persist only results over 100 percent.
+9. `GaiaDbOperation` handles `ComputeResult` by writing final rows ordered by `source_id` to `output/results.csv`.
 10. The process writes `output/results.done`.
 
 If any step fails, the process writes `output/results.err`, then re-raises the failure.
@@ -174,7 +169,7 @@ run_name,file_range,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux
 run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change
 ```
 
-`GaiaComputeOperation` inserts into `PhotometryChange` with one set-oriented SQL statement:
+The compute route in `GaiaDbOperation` inserts into `PhotometryChange` with one set-oriented SQL statement:
 
 1. Delete prior final rows for the same `run_name`.
 2. Read `SourceFluxAggregate` rows for that `run_name`.
@@ -264,7 +259,7 @@ Environment overrides:
 | `GAIA_DB_BATCH_SIZE` | `10000` | DBAPI aggregate insert batch size |
 | `GAIA_ACTOR_POOL` | `8` | Production actor pool size |
 | `GAIA_DOWNLOAD_POOL` | `4` | Download operation pool size |
-| `GAIA_IMPORT_POOL` | `4` | Import operation pool size |
+| `GAIA_IMPORT_POOL` | `4` | DB operation pool size used by import fan-out |
 
 The 20 benchmark files are configured as compact numeric file boundaries in `FIRST_20_FILE_BOUNDARIES`; components expand those boundaries into Gaia archive file ranges at runtime.
 

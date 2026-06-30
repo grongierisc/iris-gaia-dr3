@@ -12,6 +12,11 @@ class GaiaBenchmarkRequest(Message):
 
 
 @dataclass
+class PrepareRunRequest(Message):
+    run_name: str
+
+
+@dataclass
 class PrepareRunResult(Message):
     run_name: str
 
@@ -29,6 +34,11 @@ class FileResult(Message):
     run_name: str
     file_range: str
     local_path: str = ""
+
+
+@dataclass
+class ComputeRequest(Message):
+    run_name: str
 
 
 @dataclass

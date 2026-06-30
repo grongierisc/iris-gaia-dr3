@@ -7,13 +7,18 @@ import io
 import pytest
 
 from gaia import operations
-from gaia.messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, PrepareRunResult
+from gaia.messages import (
+    ComputeRequest,
+    ComputeResult,
+    FileRequest,
+    FileResult,
+    GaiaBenchmarkRequest,
+    PrepareRunRequest,
+    PrepareRunResult,
+)
 from gaia.operations import (
-    GaiaComputeOperation,
-    GaiaCsvExportOperation,
+    GaiaDbOperation,
     GaiaDownloadOperation,
-    GaiaImportOperation,
-    GaiaPrepareRunOperation,
 )
 from gaia.processes import GaiaBenchmarkProcess
 from gaia.services import GaiaBenchmarkService
@@ -138,7 +143,7 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path)
 
     assert result == ComputeResult("run-1", 2, "output/results.csv")
     assert [call[0] for call in sync_calls] == ["prepare", "compute", "export"]
-    assert [type(call[1]) for call in sync_calls] == [GaiaBenchmarkRequest, GaiaBenchmarkRequest, ComputeResult]
+    assert [type(call[1]) for call in sync_calls] == [PrepareRunRequest, ComputeRequest, ComputeResult]
     assert [call[2] for call in sync_calls] == [99, 99, 99]
     assert [len(call[0]) for call in multi_calls] == [2, 2]
     assert process.done_file.exists()
@@ -177,9 +182,9 @@ def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
     assert [call[0] for call in sync_calls] == ["prepare"]
 
 
-def test_prepare_operation_clears_markers_and_persistent_rows(tmp_path, monkeypatch):
+def test_db_operation_prepares_run_and_clears_persistent_rows(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
-    operation = configure(GaiaPrepareRunOperation(), tmp_path, boundaries="000000,000002")
+    operation = configure(GaiaDbOperation(), tmp_path, boundaries="000000,000002")
     operation.on_init()
     for path in (
         operation.done_file,
@@ -189,7 +194,7 @@ def test_prepare_operation_clears_markers_and_persistent_rows(tmp_path, monkeypa
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("stale", encoding="utf-8")
 
-    result = operation.on_message(GaiaBenchmarkRequest("run-3"))
+    result = operation.prepare_run(PrepareRunRequest("run-3"))
 
     assert result == PrepareRunResult("run-3")
     assert not operation.done_file.exists()
@@ -202,9 +207,9 @@ def test_prepare_operation_clears_markers_and_persistent_rows(tmp_path, monkeypa
     assert connection.closed
 
 
-def test_import_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monkeypatch):
+def test_db_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
-    operation = configure(GaiaImportOperation(), tmp_path)
+    operation = configure(GaiaDbOperation(), tmp_path)
     operation.on_init()
     input_file = tmp_path / "input.csv.gz"
     rows = [
@@ -217,7 +222,7 @@ def test_import_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monke
         output.write("#comment\n")
         csv.writer(output).writerows(rows)
 
-    result = operation.on_message(FileRequest("run-4", "000000-003111", local_path=str(input_file)))
+    result = operation.import_file(FileRequest("run-4", "000000-003111", local_path=str(input_file)))
 
     assert result == FileResult("run-4", "000000-003111", str(input_file))
     assert connection.commit_count == 2
@@ -278,13 +283,13 @@ def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
     assert session_closed == [True]
 
 
-def test_compute_operation_uses_lifecycle_db_connection(tmp_path, monkeypatch):
+def test_db_operation_computes_with_lifecycle_db_connection(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
     cursor.fetchone_result = (2,)
-    operation = configure(GaiaComputeOperation(), tmp_path)
+    operation = configure(GaiaDbOperation(), tmp_path)
     operation.on_init()
 
-    result = operation.on_message(GaiaBenchmarkRequest("run-6"))
+    result = operation.compute_results(ComputeRequest("run-6"))
 
     assert result == ComputeResult("run-6", 2, "")
     assert [params for _sql, params in cursor.executed] == [
@@ -298,16 +303,16 @@ def test_compute_operation_uses_lifecycle_db_connection(tmp_path, monkeypatch):
     assert connection.closed
 
 
-def test_csv_export_operation_writes_results_file(tmp_path, monkeypatch):
+def test_db_operation_exports_results_file(tmp_path, monkeypatch):
     cursor, connection = patch_db(monkeypatch)
     cursor.fetchmany_results = [
         [(1, 2.0, 3.0, 4.0, 5.0, 150.0)],
         [(2, 6.0, 7.0, 8.0, 9.0, 175.0)],
     ]
-    operation = configure(GaiaCsvExportOperation(), tmp_path)
+    operation = configure(GaiaDbOperation(), tmp_path)
     operation.on_init()
 
-    result = operation.on_message(ComputeResult("run-6", 2, ""))
+    result = operation.export_csv(ComputeResult("run-6", 2, ""))
 
     assert result == ComputeResult("run-6", 2, str(operation.results_file))
     assert operation.results_file.read_text(encoding="utf-8").splitlines() == [

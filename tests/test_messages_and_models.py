@@ -6,10 +6,12 @@ from typing import get_type_hints
 from iop import Message
 
 from gaia.messages import (
+    ComputeRequest,
     ComputeResult,
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
+    PrepareRunRequest,
     PrepareRunResult,
 )
 from gaia.models import (
@@ -20,9 +22,11 @@ from gaia.models import (
 
 MESSAGE_TYPES = [
     GaiaBenchmarkRequest,
+    PrepareRunRequest,
     PrepareRunResult,
     FileRequest,
     FileResult,
+    ComputeRequest,
     ComputeResult,
 ]
 

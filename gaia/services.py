@@ -28,4 +28,5 @@ class GaiaBenchmarkService(GaiaSettings, PollingBusinessService):
         self.lock_file.touch()
 
         # Send a benchmark request to the Gaia benchmark process
+        self.log_info("Sending benchmark request to Gaia benchmark process", to_console=True)
         self.send_request_async(self.Output, GaiaBenchmarkRequest())

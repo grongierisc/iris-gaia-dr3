@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from iop import BusinessProcess, target
-
 from typing import TypeVar
 
+from iop import BusinessProcess, target
+
 from .messages import (
+    ComputeRequest,
     FileRequest,
     FileResult,
     GaiaBenchmarkRequest,
+    PrepareRunRequest,
     PrepareRunResult,
 )
 from .runtime import GaiaSettings
 
 T = TypeVar("T")
+
 
 class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
 
@@ -26,15 +29,15 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
     def on_message(self, request: GaiaBenchmarkRequest):
         try:
             # Start from a clean run: remove old markers and rows for this run name
-            result = self.send_request_sync(
+            self.log_info(f"Preparing Gaia run {request.run_name}", to_console=True)
+            self.send_request_sync(
                 self.PrepareOperation,
-                request,
+                PrepareRunRequest(request.run_name),
                 timeout=self.request_timeout,
             )
-            if not isinstance(result, PrepareRunResult):
-                raise TypeError(f"Unexpected prepare response: {type(result).__name__}")
 
             # Download the 20 Gaia files in parallel
+            self.log_info(f"Downloading Gaia DR3 files for run {request.run_name}", to_console=True)
             downloads = self._send_parallel(
                 self.DownloadOperation,
                 [
@@ -46,6 +49,7 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
             )
 
             # Import the downloaded files in parallel
+            self.log_info(f"Importing Gaia DR3 files for run {request.run_name}", to_console=True)
             self._send_parallel(
                 self.ImportOperation,
                 [
@@ -56,14 +60,16 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
                 "Import Gaia DR3 files",
             )
 
-            # Compute final rows in IRIS,
+            # Compute final rows in IRIS
+            self.log_info(f"Computing final rows for run {request.run_name}", to_console=True)
             result = self.send_request_sync(
                 self.ComputeOperation,
-                request,
+                ComputeRequest(request.run_name),
                 timeout=self.request_timeout,
             )
 
             # Export the final results to a CSV file
+            self.log_info(f"Exporting final results for run {request.run_name}", to_console=True)
             result = self.send_request_sync(
                 self.ExportOperation,
                 result,
@@ -109,6 +115,7 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
         return results
 
     def _complete(self) -> None:
+        self.log_info("Gaia run completed successfully", to_console=True)
         self.error_file.unlink(missing_ok=True)
         self.done_file.touch()
 

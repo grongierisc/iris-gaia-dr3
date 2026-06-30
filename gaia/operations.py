@@ -9,7 +9,14 @@ import iris
 import requests
 from iop import BusinessOperation
 
-from .messages import ComputeResult, FileRequest, FileResult, GaiaBenchmarkRequest, PrepareRunResult
+from .messages import (
+    ComputeRequest,
+    ComputeResult,
+    FileRequest,
+    FileResult,
+    PrepareRunRequest,
+    PrepareRunResult,
+)
 from .models import PhotometryChange, SourceFluxAggregate
 from .parsing import source_flux_aggregate_batches
 from .runtime import GaiaSettings
@@ -70,11 +77,14 @@ class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
             compressed.read(1)
 
 
-class GaiaDbOperation(GaiaSettings):
+class GaiaDbOperation(GaiaSettings, BusinessOperation):
+    # Business Operation: all IRIS DB work, routed by request message type
     def on_init(self) -> None:
         # DBAPI connections are created once per IoP operation worker
         self.db_connection = iris.dbapi.connect()
         self.db_cursor = self.db_connection.cursor()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.download_dir.mkdir(parents=True, exist_ok=True)
 
     def on_tear_down(self) -> None:
         # Close DBAPI resources when IoP stops this operation worker
@@ -84,13 +94,9 @@ class GaiaDbOperation(GaiaSettings):
                 with suppress(Exception):
                     handle.close()
 
-
-class GaiaPrepareRunOperation(GaiaDbOperation, BusinessOperation):
-    # Business Operation: clear old output markers and persistent rows for one run
-    def on_message(self, request: GaiaBenchmarkRequest) -> PrepareRunResult:
+    def prepare_run(self, request: PrepareRunRequest) -> PrepareRunResult:
+        # Clear old output markers and persistent rows for one run
         # Files are used as simple run markers for the challenge script
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.download_dir.mkdir(parents=True, exist_ok=True)
         for marker in (
             self.done_file,
             self.error_file,
@@ -104,10 +110,8 @@ class GaiaPrepareRunOperation(GaiaDbOperation, BusinessOperation):
         self.db_connection.commit()
         return PrepareRunResult(request.run_name)
 
-
-class GaiaImportOperation(GaiaDbOperation, BusinessOperation):
-    # Business Operation: one request imports one downloaded archive
-    def on_message(self, request: FileRequest) -> FileResult:
+    def import_file(self, request: FileRequest) -> FileResult:
+        # Import one downloaded archive into the source aggregate table
         # Make re-importing the same file idempotent for this run
         self.db_cursor.execute(
             f"DELETE FROM {SOURCE_TABLE} WHERE run_name = ? AND file_range = ?",
@@ -135,10 +139,8 @@ class GaiaImportOperation(GaiaDbOperation, BusinessOperation):
         )
         self.db_connection.commit()
 
-
-class GaiaComputeOperation(GaiaDbOperation, BusinessOperation):
-    # Business Operation: compute final rows inside IRIS with one set-oriented SQL insert
-    def on_message(self, request: GaiaBenchmarkRequest) -> ComputeResult:
+    def compute_results(self, request: ComputeRequest) -> ComputeResult:
+        # Compute final rows inside IRIS with one set-oriented SQL insert
         # Recompute is safe because previous final rows for this run are removed first
         self.db_cursor.execute(f"DELETE FROM {CHANGE_TABLE} WHERE run_name = ?", (request.run_name,))
         self.db_cursor.execute(
@@ -184,15 +186,8 @@ class GaiaComputeOperation(GaiaDbOperation, BusinessOperation):
         count = int(self.db_cursor.fetchone()[0])
         return ComputeResult(request.run_name, count, "")
 
-
-class GaiaCsvExportOperation(GaiaDbOperation, BusinessOperation):
-    # Business Operation: export final persistent rows to the challenge CSV file
-    def on_init(self) -> None:
-        super().on_init()
-        # The output directory is prepared once when the worker starts
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def on_message(self, request: ComputeResult) -> ComputeResult:
+    def export_csv(self, request: ComputeResult) -> ComputeResult:
+        # Export final persistent rows to the challenge CSV file
         # The final file is sorted to make repeated runs easy to compare
         self.db_cursor.execute(
             f"SELECT source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change "
