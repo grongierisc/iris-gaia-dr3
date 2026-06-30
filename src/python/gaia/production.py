@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from iop import Production
 
-from .config import DOWNLOAD_POOL_SIZE, IMPORT_POOL_SIZE
 from .operations import (
     GaiaComputeOperation,
     GaiaDownloadOperation,
@@ -13,29 +15,55 @@ from .processes import GaiaBenchmarkProcess
 from .services import GaiaBenchmarkService
 
 
-prod = Production("GaiaDR3.Production", testing_enabled=True, actor_pool_size=8)
+def build_production(
+    gaia_settings: Mapping[str, Any],
+    *,
+    actor_pool_size: int,
+    download_pool_size: int,
+    import_pool_size: int,
+) -> Production:
+    prod = Production(
+        "GaiaDR3.Production",
+        testing_enabled=True,
+        actor_pool_size=actor_pool_size,
+    )
+    service = prod.service(
+        "GaiaBenchmarkService",
+        GaiaBenchmarkService,
+        settings=gaia_settings,
+        adapter_settings={"CallInterval": 1},
+    )
+    process = prod.process(
+        "GaiaBenchmarkProcess",
+        GaiaBenchmarkProcess,
+        settings=gaia_settings,
+    )
+    run_state = prod.operation(
+        "GaiaRunStateOperation",
+        GaiaRunStateOperation,
+        settings=gaia_settings,
+    )
+    download = prod.operation(
+        "GaiaDownloadOperation",
+        GaiaDownloadOperation,
+        settings=gaia_settings,
+        pool_size=download_pool_size,
+    )
+    import_ = prod.operation(
+        "GaiaImportOperation",
+        GaiaImportOperation,
+        settings=gaia_settings,
+        pool_size=import_pool_size,
+    )
+    compute = prod.operation(
+        "GaiaComputeOperation",
+        GaiaComputeOperation,
+        settings=gaia_settings,
+    )
 
-service = prod.service(
-    "GaiaBenchmarkService",
-    GaiaBenchmarkService,
-    adapter_settings={"CallInterval": 1},
-)
-process = prod.process("GaiaBenchmarkProcess", GaiaBenchmarkProcess)
-run_state_operation = prod.operation("GaiaRunStateOperation", GaiaRunStateOperation)
-download_operation = prod.operation(
-    "GaiaDownloadOperation",
-    GaiaDownloadOperation,
-    pool_size=DOWNLOAD_POOL_SIZE,
-)
-import_operation = prod.operation(
-    "GaiaImportOperation",
-    GaiaImportOperation,
-    pool_size=IMPORT_POOL_SIZE,
-)
-compute_operation = prod.operation("GaiaComputeOperation", GaiaComputeOperation)
-
-service.connect(GaiaBenchmarkService.Output, process)
-process.connect(GaiaBenchmarkProcess.RunStateOperation, run_state_operation)
-process.connect(GaiaBenchmarkProcess.DownloadOperation, download_operation)
-process.connect(GaiaBenchmarkProcess.ImportOperation, import_operation)
-process.connect(GaiaBenchmarkProcess.ComputeOperation, compute_operation)
+    service.connect(GaiaBenchmarkService.Output, process)
+    process.connect(GaiaBenchmarkProcess.RunStateOperation, run_state)
+    process.connect(GaiaBenchmarkProcess.DownloadOperation, download)
+    process.connect(GaiaBenchmarkProcess.ImportOperation, import_)
+    process.connect(GaiaBenchmarkProcess.ComputeOperation, compute)
+    return prod

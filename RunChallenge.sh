@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+docker compose down --remove-orphans >&2 || true
 rm -f output/results.csv output/results.csv.tmp output/results.done output/results.err output/results.lock
 rm -rf output/downloads
 docker compose up --build -d --force-recreate iris >&2

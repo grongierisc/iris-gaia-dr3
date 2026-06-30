@@ -4,21 +4,20 @@ import os
 
 from iop import PollingBusinessService, target
 
-from .config import DONE_FILE, ERROR_FILE, LOCK_FILE
 from .messages import GaiaBenchmarkRequest
+from .runtime import GaiaSettings
 
 
-class GaiaBenchmarkService(PollingBusinessService):
+class GaiaBenchmarkService(GaiaSettings, PollingBusinessService):
     Output = target()
 
     def on_poll(self):
-        if DONE_FILE.exists() or ERROR_FILE.exists():
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.done_file.exists() or self.error_file.exists():
             return
-
         try:
-            file_descriptor = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(file_descriptor)
+            fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
         except FileExistsError:
             return
-
         self.send_request_async(self.Output, GaiaBenchmarkRequest())

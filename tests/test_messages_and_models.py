@@ -6,17 +6,11 @@ from typing import get_type_hints
 from iop import Message
 
 from src.python.gaia.messages import (
-    ComputeResultsRequest,
-    ComputeResultsResult,
-    DownloadFileRequest,
-    DownloadFileResult,
+    ComputeResult,
+    FileRequest,
+    FileResult,
     GaiaBenchmarkRequest,
-    ImportFileRequest,
-    ImportFileResult,
-    MarkRunCompleteRequest,
-    MarkRunFailedRequest,
-    PrepareRunRequest,
-    PrepareRunResult,
+    StateRequest,
 )
 from src.python.gaia.models import (
     DownloadFile,
@@ -27,16 +21,10 @@ from src.python.gaia.models import (
 
 MESSAGE_TYPES = [
     GaiaBenchmarkRequest,
-    PrepareRunRequest,
-    PrepareRunResult,
-    DownloadFileRequest,
-    DownloadFileResult,
-    ImportFileRequest,
-    ImportFileResult,
-    ComputeResultsRequest,
-    ComputeResultsResult,
-    MarkRunCompleteRequest,
-    MarkRunFailedRequest,
+    StateRequest,
+    FileRequest,
+    FileResult,
+    ComputeResult,
 ]
 
 
@@ -57,7 +45,7 @@ def test_internal_message_fields_are_primitive_serialization_contracts():
 
 
 def test_message_construction_uses_primitive_values():
-    request = DownloadFileRequest(
+    request = FileRequest(
         run_name="gaia-dr3-first-20",
         file_range="000000-003111",
         url="https://example.invalid/EpochPhotometry_000000-003111.csv.gz",
@@ -66,6 +54,13 @@ def test_message_construction_uses_primitive_values():
     assert request.run_name == "gaia-dr3-first-20"
     assert request.file_range == "000000-003111"
     assert request.url.endswith(".csv.gz")
+
+
+def test_state_message_carries_actions_without_extra_message_types():
+    request = StateRequest("gaia-dr3-first-20", "failed", error_message="boom")
+
+    assert request.action == "failed"
+    assert request.error_message == "boom"
 
 
 def test_persistent_models_use_expected_iris_class_names():

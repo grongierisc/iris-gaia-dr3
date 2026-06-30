@@ -5,169 +5,111 @@ import gzip
 import hashlib
 import os
 import urllib.request
-from pathlib import Path
-from typing import Any
+from contextlib import contextmanager, suppress
 
 import iris
 from iop import BusinessOperation
 
-from .config import (
-    DB_BATCH_SIZE,
-    DONE_FILE,
-    DOWNLOAD_DIR,
-    ERROR_FILE,
-    FIRST_20_FILE_RANGES,
-    OUTPUT_DIR,
-    RESULTS_FILE,
-    archive_file_name,
-)
-from .messages import (
-    ComputeResultsRequest,
-    ComputeResultsResult,
-    DownloadFileRequest,
-    DownloadFileResult,
-    ImportFileRequest,
-    ImportFileResult,
-    MarkRunCompleteRequest,
-    MarkRunFailedRequest,
-    PrepareRunRequest,
-    PrepareRunResult,
-)
+from .messages import ComputeResult, FileRequest, FileResult, StateRequest
 from .models import DownloadFile, PhotometryChange, SourceFluxAggregate
 from .parsing import aggregate_source_flux
+from .runtime import GaiaSettings
 
 DOWNLOAD_TABLE = DownloadFile._classname
-SOURCE_AGGREGATE_TABLE = SourceFluxAggregate._classname
-PHOTOMETRY_CHANGE_TABLE = PhotometryChange._classname
-DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+SOURCE_TABLE = SourceFluxAggregate._classname
+CHANGE_TABLE = PhotometryChange._classname
 
 
-def _connect():
-    return iris.dbapi.connect()
+@contextmanager
+def db():
+    connection = iris.dbapi.connect()
+    cursor = connection.cursor()
+    try:
+        yield cursor, connection
+    finally:
+        for handle in (cursor, connection):
+            with suppress(Exception):
+                handle.close()
 
 
-def _close_quietly(handle: Any) -> None:
-    close = getattr(handle, "close", None)
-    if callable(close):
-        try:
-            close()
-        except Exception:
-            pass
+class GaiaRunStateOperation(GaiaSettings, BusinessOperation):
+    def on_message(self, request: StateRequest) -> StateRequest:
+        if request.action == "prepare":
+            self._prepare(request.run_name)
+        elif request.action == "complete":
+            self.error_file.unlink(missing_ok=True)
+            self.done_file.touch()
+        elif request.action == "failed":
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.error_file.write_text(request.error_message, encoding="utf-8")
+        else:
+            raise ValueError(f"Unknown Gaia run action: {request.action}")
+        return request
 
-
-def _fetch_count(cursor) -> int:
-    row = cursor.fetchone()
-    if row is None:
-        return 0
-    return int(row[0])
-
-
-class GaiaRunStateOperation(BusinessOperation):
-    def prepare_run(self, request: PrepareRunRequest) -> PrepareRunResult:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        for marker in (DONE_FILE, ERROR_FILE, RESULTS_FILE, RESULTS_FILE.with_suffix(".csv.tmp")):
+    def _prepare(self, run_name: str) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        for marker in (
+            self.done_file,
+            self.error_file,
+            self.results_file,
+            self.results_file.with_suffix(".csv.tmp"),
+        ):
             marker.unlink(missing_ok=True)
-        for file_range in FIRST_20_FILE_RANGES:
-            file_path = DOWNLOAD_DIR / archive_file_name(file_range)
-            file_path.unlink(missing_ok=True)
-            Path(f"{file_path}.tmp").unlink(missing_ok=True)
+        for file_range in self.file_ranges:
+            path = self.download_file(file_range)
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".tmp").unlink(missing_ok=True)
 
-        connection = _connect()
-        cursor = connection.cursor()
-        try:
-            for table_name in (
-                DOWNLOAD_TABLE,
-                SOURCE_AGGREGATE_TABLE,
-                PHOTOMETRY_CHANGE_TABLE,
-            ):
-                cursor.execute(f"DELETE FROM {table_name} WHERE run_name = ?", (request.run_name,))
+        with db() as (cursor, connection):
+            for table in (DOWNLOAD_TABLE, SOURCE_TABLE, CHANGE_TABLE):
+                cursor.execute(f"DELETE FROM {table} WHERE run_name = ?", (run_name,))
             connection.commit()
-        finally:
-            _close_quietly(cursor)
-            _close_quietly(connection)
-
-        return PrepareRunResult(
-            run_name=request.run_name,
-            file_count=len(FIRST_20_FILE_RANGES),
-        )
-
-    def mark_run_complete(self, request: MarkRunCompleteRequest) -> MarkRunCompleteRequest:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        ERROR_FILE.unlink(missing_ok=True)
-        DONE_FILE.touch()
-        return request
-
-    def mark_run_failed(self, request: MarkRunFailedRequest) -> MarkRunFailedRequest:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        ERROR_FILE.write_text(request.error_message, encoding="utf-8")
-        return request
 
 
-class GaiaDownloadOperation(BusinessOperation):
-    def on_message(self, request: DownloadFileRequest) -> DownloadFileResult:
-        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        target_path = DOWNLOAD_DIR / archive_file_name(request.file_range)
-        temp_path = Path(f"{target_path}.tmp")
-        temp_path.unlink(missing_ok=True)
-
+class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
+    def on_message(self, request: FileRequest) -> FileResult:
+        self.download_dir.mkdir(parents=True, exist_ok=True)
+        path = self.download_file(request.file_range)
+        temp = path.with_suffix(path.suffix + ".tmp")
+        temp.unlink(missing_ok=True)
         try:
-            sha256 = hashlib.sha256()
-            with urllib.request.urlopen(request.url, timeout=120) as response:
-                with temp_path.open("wb") as output_file:
-                    while True:
-                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        sha256.update(chunk)
-                        output_file.write(chunk)
-
-            with gzip.open(temp_path, "rb") as compressed_file:
-                compressed_file.read(1)
-
-            os.replace(temp_path, target_path)
-            size_bytes = target_path.stat().st_size
-            digest = sha256.hexdigest()
-            self._record_download(
-                request=request,
-                local_path=str(target_path),
-                size_bytes=size_bytes,
-                sha256=digest,
-                status="downloaded",
-                error_message=None,
+            digest = hashlib.sha256()
+            with urllib.request.urlopen(request.url, timeout=self.http_timeout) as response:
+                with temp.open("wb") as output:
+                    for chunk in iter(lambda: response.read(self.download_chunk_size), b""):
+                        digest.update(chunk)
+                        output.write(chunk)
+            with gzip.open(temp, "rb") as compressed:
+                compressed.read(1)
+            os.replace(temp, path)
+            result = FileResult(
+                request.run_name,
+                request.file_range,
+                str(path),
+                path.stat().st_size,
+                digest.hexdigest(),
             )
-            return DownloadFileResult(
-                run_name=request.run_name,
-                file_range=request.file_range,
-                local_path=str(target_path),
-                size_bytes=size_bytes,
-                sha256=digest,
-            )
+            self._record(request, result, "downloaded")
+            return result
         except Exception as error:
-            temp_path.unlink(missing_ok=True)
-            self._record_download(
-                request=request,
-                local_path=str(target_path),
-                size_bytes=0,
-                sha256="",
-                status="failed",
-                error_message=repr(error),
+            temp.unlink(missing_ok=True)
+            self._record(
+                request,
+                FileResult(request.run_name, request.file_range, str(path)),
+                "failed",
+                repr(error),
             )
             raise
 
-    def _record_download(
+    def _record(
         self,
-        *,
-        request: DownloadFileRequest,
-        local_path: str,
-        size_bytes: int,
-        sha256: str,
+        request: FileRequest,
+        result: FileResult,
         status: str,
-        error_message: str | None,
+        error_message: str | None = None,
     ) -> None:
-        connection = _connect()
-        cursor = connection.cursor()
-        try:
+        with db() as (cursor, connection):
             cursor.execute(
                 f"DELETE FROM {DOWNLOAD_TABLE} WHERE run_name = ? AND file_range = ?",
                 (request.run_name, request.file_range),
@@ -180,29 +122,23 @@ class GaiaDownloadOperation(BusinessOperation):
                     request.run_name,
                     request.file_range,
                     request.url,
-                    local_path,
-                    size_bytes,
-                    sha256,
+                    result.local_path,
+                    result.size_bytes,
+                    result.sha256,
                     status,
                     error_message,
                 ),
             )
             connection.commit()
-        finally:
-            _close_quietly(cursor)
-            _close_quietly(connection)
 
 
-class GaiaImportOperation(BusinessOperation):
-    def on_message(self, request: ImportFileRequest) -> ImportFileResult:
-        source_count = 0
-        batch: list[tuple[str, str, int, float | None, float | None, float | None, float | None]] = []
-
-        connection = _connect()
-        cursor = connection.cursor()
-        try:
+class GaiaImportOperation(GaiaSettings, BusinessOperation):
+    def on_message(self, request: FileRequest) -> FileResult:
+        count = 0
+        batch: list[tuple] = []
+        with db() as (cursor, connection):
             cursor.execute(
-                f"DELETE FROM {SOURCE_AGGREGATE_TABLE} WHERE run_name = ? AND file_range = ?",
+                f"DELETE FROM {SOURCE_TABLE} WHERE run_name = ? AND file_range = ?",
                 (request.run_name, request.file_range),
             )
             connection.commit()
@@ -213,11 +149,7 @@ class GaiaImportOperation(BusinessOperation):
                 for row in reader:
                     if len(row) <= 16:
                         continue
-                    stats = aggregate_source_flux(
-                        source_id=int(row[1]),
-                        bp_flux=row[11],
-                        rp_flux=row[16],
-                    )
+                    stats = aggregate_source_flux(int(row[1]), row[11], row[16])
                     if not stats.has_flux:
                         continue
                     batch.append(
@@ -231,26 +163,17 @@ class GaiaImportOperation(BusinessOperation):
                             stats.rp_max_flux,
                         )
                     )
-                    source_count += 1
-                    if len(batch) >= DB_BATCH_SIZE:
-                        self._insert_aggregates(cursor, connection, batch)
+                    count += 1
+                    if len(batch) >= self.db_batch_size:
+                        self._insert(cursor, connection, batch)
                         batch.clear()
-
             if batch:
-                self._insert_aggregates(cursor, connection, batch)
+                self._insert(cursor, connection, batch)
+        return FileResult(request.run_name, request.file_range, request.local_path, count=count)
 
-            return ImportFileResult(
-                run_name=request.run_name,
-                file_range=request.file_range,
-                source_count=source_count,
-            )
-        finally:
-            _close_quietly(cursor)
-            _close_quietly(connection)
-
-    def _insert_aggregates(self, cursor, connection, batch: list[tuple]) -> None:
+    def _insert(self, cursor, connection, batch: list[tuple]) -> None:
         cursor.executemany(
-            f"INSERT INTO {SOURCE_AGGREGATE_TABLE} "
+            f"INSERT INTO {SOURCE_TABLE} "
             "(run_name,file_range,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux) "
             "VALUES (?,?,?,?,?,?,?)",
             batch,
@@ -258,36 +181,18 @@ class GaiaImportOperation(BusinessOperation):
         connection.commit()
 
 
-class GaiaComputeOperation(BusinessOperation):
-    def on_message(self, request: ComputeResultsRequest) -> ComputeResultsResult:
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        connection = _connect()
-        cursor = connection.cursor()
-        try:
-            cursor.execute(
-                f"DELETE FROM {PHOTOMETRY_CHANGE_TABLE} WHERE run_name = ?",
-                (request.run_name,),
-            )
+class GaiaComputeOperation(GaiaSettings, BusinessOperation):
+    def on_message(self, request: StateRequest) -> ComputeResult:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        with db() as (cursor, connection):
+            cursor.execute(f"DELETE FROM {CHANGE_TABLE} WHERE run_name = ?", (request.run_name,))
             cursor.execute(
                 f"""
-                INSERT INTO {PHOTOMETRY_CHANGE_TABLE}
+                INSERT INTO {CHANGE_TABLE}
                     (run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change)
-                SELECT
-                    run_name,
-                    source_id,
-                    bp_min_flux,
-                    bp_max_flux,
-                    rp_min_flux,
-                    rp_max_flux,
-                    percentage_change
+                SELECT run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change
                 FROM (
-                    SELECT
-                        ? AS run_name,
-                        source_id,
-                        bp_min_flux,
-                        bp_max_flux,
-                        rp_min_flux,
-                        rp_max_flux,
+                    SELECT ? AS run_name, source_id, bp_min_flux, bp_max_flux, rp_min_flux, rp_max_flux,
                         CASE
                             WHEN bp_change IS NULL THEN rp_change
                             WHEN rp_change IS NULL THEN bp_change
@@ -295,28 +200,18 @@ class GaiaComputeOperation(BusinessOperation):
                             ELSE rp_change
                         END AS percentage_change
                     FROM (
-                        SELECT
-                            source_id,
-                            bp_min_flux,
-                            bp_max_flux,
-                            rp_min_flux,
-                            rp_max_flux,
-                            CASE
-                                WHEN bp_min_flux IS NULL OR bp_min_flux = 0 THEN NULL
-                                ELSE ((bp_max_flux - bp_min_flux) / bp_min_flux) * 100
-                            END AS bp_change,
-                            CASE
-                                WHEN rp_min_flux IS NULL OR rp_min_flux = 0 THEN NULL
-                                ELSE ((rp_max_flux - rp_min_flux) / rp_min_flux) * 100
-                            END AS rp_change
+                        SELECT source_id, bp_min_flux, bp_max_flux, rp_min_flux, rp_max_flux,
+                            CASE WHEN bp_min_flux IS NULL OR bp_min_flux = 0
+                                THEN NULL ELSE ((bp_max_flux - bp_min_flux) / bp_min_flux) * 100 END AS bp_change,
+                            CASE WHEN rp_min_flux IS NULL OR rp_min_flux = 0
+                                THEN NULL ELSE ((rp_max_flux - rp_min_flux) / rp_min_flux) * 100 END AS rp_change
                         FROM (
-                            SELECT
-                                source_id,
+                            SELECT source_id,
                                 MIN(bp_min_flux) AS bp_min_flux,
                                 MAX(bp_max_flux) AS bp_max_flux,
                                 MIN(rp_min_flux) AS rp_min_flux,
                                 MAX(rp_max_flux) AS rp_max_flux
-                            FROM {SOURCE_AGGREGATE_TABLE}
+                            FROM {SOURCE_TABLE}
                             WHERE run_name = ?
                             GROUP BY source_id
                         )
@@ -327,37 +222,23 @@ class GaiaComputeOperation(BusinessOperation):
                 (request.run_name, request.run_name),
             )
             connection.commit()
-
             cursor.execute(
-                f"SELECT COUNT(*) FROM {PHOTOMETRY_CHANGE_TABLE} WHERE run_name = ?",
+                f"SELECT COUNT(*) FROM {CHANGE_TABLE} WHERE run_name = ?",
                 (request.run_name,),
             )
-            result_count = _fetch_count(cursor)
+            count = int(cursor.fetchone()[0])
             self._write_results(cursor, request.run_name)
-
-            return ComputeResultsResult(
-                run_name=request.run_name,
-                result_count=result_count,
-                results_file=str(RESULTS_FILE),
-            )
-        finally:
-            _close_quietly(cursor)
-            _close_quietly(connection)
+        return ComputeResult(request.run_name, count, str(self.results_file))
 
     def _write_results(self, cursor, run_name: str) -> None:
         cursor.execute(
             f"SELECT source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change "
-            f"FROM {PHOTOMETRY_CHANGE_TABLE} WHERE run_name = ? ORDER BY source_id",
+            f"FROM {CHANGE_TABLE} WHERE run_name = ? ORDER BY source_id",
             (run_name,),
         )
-
-        temp_file = RESULTS_FILE.with_suffix(".csv.tmp")
-        with temp_file.open("w", newline="", encoding="utf-8") as output_file:
-            writer = csv.writer(output_file)
-            while True:
-                rows = cursor.fetchmany(1000)
-                if not rows:
-                    break
+        temp = self.results_file.with_suffix(".csv.tmp")
+        with temp.open("w", newline="", encoding="utf-8") as output:
+            writer = csv.writer(output)
+            while rows := cursor.fetchmany(1000):
                 writer.writerows(rows)
-
-        os.replace(temp_file, RESULTS_FILE)
+        os.replace(temp, self.results_file)
