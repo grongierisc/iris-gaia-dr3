@@ -14,7 +14,6 @@ class GaiaSettings:
     RequestTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
     HttpTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
     DbBatchSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
-    DownloadChunkSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
 
     @property
     def output_dir(self) -> Path:
@@ -56,10 +55,6 @@ class GaiaSettings:
     @property
     def db_batch_size(self) -> int:
         return int(self.DbBatchSize)
-
-    @property
-    def download_chunk_size(self) -> int:
-        return int(self.DownloadChunkSize)
 
     def archive_url(self, file_range: str) -> str:
         return str(self.ArchiveUrlTemplate) % file_range

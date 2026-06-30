@@ -3,10 +3,10 @@ from __future__ import annotations
 import csv
 import gzip
 import os
-import urllib.request
 from contextlib import contextmanager, suppress
 
 import iris
+import requests
 from iop import BusinessOperation
 
 from .messages import ComputeResult, FileRequest, FileResult, StateRequest
@@ -16,6 +16,7 @@ from .runtime import GaiaSettings
 
 SOURCE_TABLE = SourceFluxAggregate._classname
 CHANGE_TABLE = PhotometryChange._classname
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 RESULT_HEADER = (
     "source_id",
     "bp_min_flux",
@@ -79,10 +80,12 @@ class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
 
         temp.unlink(missing_ok=True)
         try:
-            with urllib.request.urlopen(request.url, timeout=self.http_timeout) as response:
+            with requests.get(request.url, stream=True, timeout=self.http_timeout) as response:
+                response.raise_for_status()
                 with temp.open("wb") as output:
-                    for chunk in iter(lambda: response.read(self.download_chunk_size), b""):
-                        output.write(chunk)
+                    for chunk in response.iter_content(DOWNLOAD_CHUNK_SIZE):
+                        if chunk:
+                            output.write(chunk)
             self._verify(temp)
             os.replace(temp, path)
             return FileResult(request.run_name, request.file_range, str(path))
@@ -174,7 +177,7 @@ class GaiaCsvExportOperation(GaiaSettings, BusinessOperation):
     def on_message(self, request: ComputeResult) -> ComputeResult:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         temp = self.results_file.with_suffix(".csv.tmp")
-        with db() as (cursor, _connection):
+        with db() as (cursor, _):
             cursor.execute(
                 f"SELECT source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change "
                 f"FROM {CHANGE_TABLE} WHERE run_name = ? ORDER BY source_id",

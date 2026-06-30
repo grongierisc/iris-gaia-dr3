@@ -39,7 +39,6 @@ GAIA_SETTINGS = {
     "RequestTimeoutSeconds": int(os.getenv("GAIA_REQUEST_TIMEOUT_SECONDS", "1800")),
     "HttpTimeoutSeconds": int(os.getenv("GAIA_HTTP_TIMEOUT_SECONDS", "120")),
     "DbBatchSize": int(os.getenv("GAIA_DB_BATCH_SIZE", "10000")),
-    "DownloadChunkSize": int(os.getenv("GAIA_DOWNLOAD_CHUNK_SIZE", str(1024 * 1024))),
 }
 
 prod = build_production(

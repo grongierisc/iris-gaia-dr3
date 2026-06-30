@@ -25,7 +25,6 @@ def configure(component, tmp_path, *, boundaries: str = "000000,003112,005264"):
     component.RequestTimeoutSeconds = 99
     component.HttpTimeoutSeconds = 7
     component.DbBatchSize = 2
-    component.DownloadChunkSize = 4
     return component
 
 
@@ -229,23 +228,28 @@ def test_import_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monke
 def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
     operation = configure(GaiaDownloadOperation(), tmp_path)
     payload = gzip.compress(b"hello")
+    calls = []
 
     class Response:
-        def __init__(self):
-            self.offset = 0
-
         def __enter__(self):
             return self
 
         def __exit__(self, *_args):
             return False
 
-        def read(self, size):
-            chunk = payload[self.offset : self.offset + size]
-            self.offset += len(chunk)
-            return chunk
+        def raise_for_status(self):
+            pass
 
-    monkeypatch.setattr(operations.urllib.request, "urlopen", lambda url, timeout: Response())
+        def iter_content(self, chunk_size):
+            calls.append(chunk_size)
+            yield payload[:2]
+            yield payload[2:]
+
+    def get(url, stream, timeout):
+        calls.append((url, stream, timeout))
+        return Response()
+
+    monkeypatch.setattr(operations.requests, "get", get)
 
     result = operation.on_message(
         FileRequest(
@@ -257,6 +261,10 @@ def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
 
     assert gzip.open(result.local_path, "rb").read() == b"hello"
     assert result == FileResult("run-5", "000000-003111", result.local_path)
+    assert calls == [
+        ("https://example.invalid/EpochPhotometry_000000-003111.csv.gz", True, 7),
+        operations.DOWNLOAD_CHUNK_SIZE,
+    ]
 
 
 def test_csv_export_operation_writes_results_file(tmp_path, monkeypatch):

@@ -263,7 +263,6 @@ Environment overrides:
 | `GAIA_REQUEST_TIMEOUT_SECONDS` | `1800` | Sync request timeout for long-running workflow calls |
 | `GAIA_HTTP_TIMEOUT_SECONDS` | `120` | Per-download HTTP timeout |
 | `GAIA_DB_BATCH_SIZE` | `10000` | DBAPI aggregate insert batch size |
-| `GAIA_DOWNLOAD_CHUNK_SIZE` | `1048576` | Download read chunk size |
 | `GAIA_ACTOR_POOL` | `8` | Production actor pool size |
 | `GAIA_DOWNLOAD_POOL` | `4` | Download operation pool size |
 | `GAIA_IMPORT_POOL` | `4` | Import operation pool size |
