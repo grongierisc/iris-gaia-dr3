@@ -8,9 +8,13 @@ from iop import Message
 from gaia.messages import (
     ComputeRequest,
     ComputeResult,
-    FileRequest,
-    FileResult,
+    DownloadFileRequest,
+    DownloadFileResult,
+    ExportCsvRequest,
+    ExportCsvResult,
     GaiaBenchmarkRequest,
+    ImportFileRequest,
+    ImportFileResult,
     PrepareRunRequest,
     PrepareRunResult,
 )
@@ -24,10 +28,14 @@ MESSAGE_TYPES = [
     GaiaBenchmarkRequest,
     PrepareRunRequest,
     PrepareRunResult,
-    FileRequest,
-    FileResult,
+    DownloadFileRequest,
+    DownloadFileResult,
+    ImportFileRequest,
+    ImportFileResult,
     ComputeRequest,
     ComputeResult,
+    ExportCsvRequest,
+    ExportCsvResult,
 ]
 
 
@@ -48,15 +56,21 @@ def test_internal_message_fields_are_primitive_serialization_contracts():
 
 
 def test_message_construction_uses_primitive_values():
-    request = FileRequest(
+    request = DownloadFileRequest(
         run_name="gaia-dr3-first-20",
         file_range="000000-003111",
         url="https://example.invalid/EpochPhotometry_000000-003111.csv.gz",
+    )
+    import_request = ImportFileRequest(
+        run_name=request.run_name,
+        file_range=request.file_range,
+        local_path="/tmp/EpochPhotometry_000000-003111.csv.gz",
     )
 
     assert request.run_name == "gaia-dr3-first-20"
     assert request.file_range == "000000-003111"
     assert request.url.endswith(".csv.gz")
+    assert import_request.local_path.endswith(".csv.gz")
 
 
 def test_persistent_models_use_expected_iris_class_names():

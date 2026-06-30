@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-from typing import TypeVar
+import asyncio
 
 from iop import BusinessProcess, target
 
 from .messages import (
     ComputeRequest,
-    FileRequest,
-    FileResult,
+    ComputeResult,
+    DownloadFileRequest,
+    DownloadFileResult,
+    ExportCsvRequest,
+    ExportCsvResult,
     GaiaBenchmarkRequest,
+    ImportFileRequest,
+    ImportFileResult,
     PrepareRunRequest,
     PrepareRunResult,
 )
 from .runtime import GaiaSettings
-
-T = TypeVar("T")
 
 
 class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
@@ -30,50 +33,69 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
         try:
             # Start from a clean run: remove old markers and rows for this run name
             self.log_info(f"Preparing Gaia run {request.run_name}", to_console=True)
-            self.send_request_sync(
+            self._expect(
+                self.send_request_sync(
+                    self.PrepareOperation,
+                    PrepareRunRequest(request.run_name),
+                    timeout=self.request_timeout,
+                    description="Prepare Gaia run",
+                ),
+                PrepareRunResult,
                 self.PrepareOperation,
-                PrepareRunRequest(request.run_name),
-                timeout=self.request_timeout,
             )
 
             # Download the 20 Gaia files in parallel
             self.log_info(f"Downloading Gaia DR3 files for run {request.run_name}", to_console=True)
-            downloads = self._send_parallel(
-                self.DownloadOperation,
-                [
-                    FileRequest(request.run_name, file_range, url=self.archive_url(file_range))
-                    for file_range in self.file_ranges
-                ],
-                FileResult,
-                "Download Gaia DR3 files",
+            downloads = asyncio.run(
+                self._send_parallel(
+                    self.DownloadOperation,
+                    [
+                        DownloadFileRequest(request.run_name, file_range, self.archive_url(file_range))
+                        for file_range in self.file_ranges
+                    ],
+                    DownloadFileResult,
+                    "Download Gaia DR3 files",
+                )
             )
 
             # Import the downloaded files in parallel
             self.log_info(f"Importing Gaia DR3 files for run {request.run_name}", to_console=True)
-            self._send_parallel(
-                self.ImportOperation,
-                [
-                    FileRequest(result.run_name, result.file_range, local_path=result.local_path)
-                    for result in downloads
-                ],
-                FileResult,
-                "Import Gaia DR3 files",
+            asyncio.run(
+                self._send_parallel(
+                    self.ImportOperation,
+                    [
+                        ImportFileRequest(result.run_name, result.file_range, result.local_path)
+                        for result in downloads
+                    ],
+                    ImportFileResult,
+                    "Import Gaia DR3 files",
+                )
             )
 
             # Compute final rows in IRIS
             self.log_info(f"Computing final rows for run {request.run_name}", to_console=True)
-            result = self.send_request_sync(
+            result = self._expect(
+                self.send_request_sync(
+                    self.ComputeOperation,
+                    ComputeRequest(request.run_name),
+                    timeout=self.request_timeout,
+                    description="Compute final rows",
+                ),
+                ComputeResult,
                 self.ComputeOperation,
-                ComputeRequest(request.run_name),
-                timeout=self.request_timeout,
             )
 
             # Export the final results to a CSV file
             self.log_info(f"Exporting final results for run {request.run_name}", to_console=True)
-            result = self.send_request_sync(
+            result = self._expect(
+                self.send_request_sync(
+                    self.ExportOperation,
+                    ExportCsvRequest(result.run_name, result.result_count),
+                    timeout=self.request_timeout,
+                    description="Export final results",
+                ),
+                ExportCsvResult,
                 self.ExportOperation,
-                result,
-                timeout=self.request_timeout,
             )
 
             # Write the success marker watched by RunChallenge.sh
@@ -85,33 +107,48 @@ class GaiaBenchmarkProcess(GaiaSettings, BusinessProcess):
             self._fail(repr(error))
             raise
 
-    def _send_parallel(
+    def _expect(self, response, expected, target):
+        if not isinstance(response, expected):
+            raise TypeError(
+                f"{target} returned {type(response).__name__}, "
+                f"expected {expected.__name__}"
+            )
+        return response
+
+    async def _send_parallel(
         self,
         target,
-        requests: list[T],
+        requests,
         expected,
         description: str,
-    ) -> list[T]:
-        # send_multi_request_sync fans out one request per file and waits for all responses
-        responses = self.send_multi_request_sync(
-            [(target, request) for request in requests],
-            timeout=self.request_timeout,
-            description=description,
-        )
-        results: list[T] = []
-        for response_target, request, response, status in responses:
-            # IoP returns a status for each response; 1 means success
-            if status != 1:
-                raise RuntimeError(
-                    f"{response_target} failed with status {status} "
-                    f"for {type(request).__name__}"
+    ):
+        # send_request_async_ng lets the process log each file as soon as it completes
+        tasks = [
+            asyncio.create_task(
+                self.send_request_async_ng(
+                    target,
+                    request,
+                    timeout=self.request_timeout,
+                    description=f"{description}: {request.file_range}",
                 )
-            if not isinstance(response, expected):
-                raise TypeError(
-                    f"{response_target} returned {type(response).__name__}, "
-                    f"expected {expected.__name__}"
+            )
+            for request in requests
+        ]
+        results = []
+        completed = 0
+        try:
+            for done in asyncio.as_completed(tasks):
+                result = self._expect(await done, expected, target)
+                results.append(result)
+                completed += 1
+                self.log_info(
+                    f"{description}: {completed}/{len(tasks)} {result.file_range}",
+                    to_console=True,
                 )
-            results.append(response)
+        except Exception:
+            for task in tasks:
+                task.cancel()
+            raise
         return results
 
     def _complete(self) -> None:

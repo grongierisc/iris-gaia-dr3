@@ -120,13 +120,14 @@ flowchart LR
 1. `GaiaBenchmarkService` polls once per second.
 2. It creates `output/results.lock` and sends a `GaiaBenchmarkRequest` to the process.
 3. `GaiaBenchmarkProcess` sends `PrepareRunRequest` to `GaiaDbOperation` to clear prior persistent rows and output markers.
-4. The process fans out 20 download requests to `GaiaDownloadOperation`.
+4. The process fans out 20 `DownloadFileRequest` messages to `GaiaDownloadOperation` with `send_request_async_ng`.
 5. Downloads are stored in `output/downloads/`. Existing readable gzip files are reused.
-6. The process fans out 20 `FileRequest` import messages to `GaiaDbOperation`.
+6. The process logs each completed download, then fans out 20 `ImportFileRequest` messages to `GaiaDbOperation` with `send_request_async_ng`.
 7. Each import request parses one gzip file, computes per-row BP/RP min/max values, and inserts aggregate rows with `executemany`.
-8. `GaiaDbOperation` handles `ComputeRequest` with SQL to combine all per-file aggregates by `source_id`, calculate percentage change, and persist only results over 100 percent.
-9. `GaiaDbOperation` handles `ComputeResult` by writing final rows ordered by `source_id` to `output/results.csv`.
-10. The process writes `output/results.done`.
+8. The process logs each completed import.
+9. `GaiaDbOperation` handles `ComputeRequest` with SQL to combine all per-file aggregates by `source_id`, calculate percentage change, and persist only results over 100 percent.
+10. `GaiaDbOperation` handles `ExportCsvRequest` by selecting final rows ordered by `source_id`; `gaia.exporting` writes them to `output/results.csv`.
+11. The process writes `output/results.done`.
 
 If any step fails, the process writes `output/results.err`, then re-raises the failure.
 
@@ -266,7 +267,7 @@ The 20 benchmark files are configured as compact numeric file boundaries in `FIR
 ## How It Meets GOAL.md
 
 - Fully functional: `RunChallenge.sh` starts IRIS, runs the production, waits for completion, and prints the CSV result file.
-- Scalable ingestion: downloads and imports are fan-out operations with configurable pool sizes.
+- Scalable ingestion: downloads and imports are async fan-out operations with configurable pool sizes and per-file completion logs.
 - InterSystems-first implementation: orchestration runs through an IRIS IoP production; aggregate and final result data are stored in IRIS persistent tables.
 - Correct dataset: `settings.py` targets exactly the first 20 Gaia DR3 epoch photometry archives required by the benchmark.
 - Correct output: final CSV contains `source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change` as the header, followed by one object per row.

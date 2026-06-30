@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import gzip
 import shutil
 from contextlib import suppress
@@ -12,11 +11,16 @@ from iop import BusinessOperation
 from .messages import (
     ComputeRequest,
     ComputeResult,
-    FileRequest,
-    FileResult,
+    DownloadFileRequest,
+    DownloadFileResult,
+    ExportCsvRequest,
+    ExportCsvResult,
+    ImportFileRequest,
+    ImportFileResult,
     PrepareRunRequest,
     PrepareRunResult,
 )
+from .exporting import write_results_csv
 from .models import PhotometryChange, SourceFluxAggregate
 from .parsing import source_flux_aggregate_batches
 from .runtime import GaiaSettings
@@ -24,16 +28,6 @@ from .runtime import GaiaSettings
 # iris-persistence creates these IRIS class-backed tables from models.py
 SOURCE_TABLE = SourceFluxAggregate._classname
 CHANGE_TABLE = PhotometryChange._classname
-
-RESULT_HEADER = (
-    "source_id",
-    "bp_min_flux",
-    "bp_max_flux",
-    "rp_min_flux",
-    "rp_max_flux",
-    "percentage_change",
-)
-
 
 class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
     # Business Operation: one request downloads one Gaia .csv.gz archive
@@ -48,13 +42,13 @@ class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
         if session is not None:
             session.close()
 
-    def on_message(self, request: FileRequest) -> FileResult:
+    def on_message(self, request: DownloadFileRequest) -> DownloadFileResult:
         path = self.download_file(request.file_range)
 
         # Reuse a file when a previous run already downloaded a readable gzip
         if path.exists():
             self._verify(path)
-            return FileResult(request.run_name, request.file_range, str(path))
+            return DownloadFileResult(request.run_name, request.file_range, str(path))
 
         try:
             with self.http_session.get(
@@ -66,7 +60,7 @@ class GaiaDownloadOperation(GaiaSettings, BusinessOperation):
                 with path.open("wb") as output:
                     shutil.copyfileobj(response.raw, output)
             self._verify(path)
-            return FileResult(request.run_name, request.file_range, str(path))
+            return DownloadFileResult(request.run_name, request.file_range, str(path))
         except Exception:
             path.unlink(missing_ok=True)
             raise
@@ -110,7 +104,7 @@ class GaiaDbOperation(GaiaSettings, BusinessOperation):
         self.db_connection.commit()
         return PrepareRunResult(request.run_name)
 
-    def import_file(self, request: FileRequest) -> FileResult:
+    def import_file(self, request: ImportFileRequest) -> ImportFileResult:
         # Import one downloaded archive into the source aggregate table
         # Make re-importing the same file idempotent for this run
         self.db_cursor.execute(
@@ -120,14 +114,16 @@ class GaiaDbOperation(GaiaSettings, BusinessOperation):
         self.db_connection.commit()
 
         # parsing.py yields ready-to-insert aggregate rows in DB-sized batches
+        imported_rows = 0
         for batch in source_flux_aggregate_batches(
             run_name=request.run_name,
             file_range=request.file_range,
             local_path=request.local_path,
             batch_size=self.db_batch_size,
         ):
+            imported_rows += len(batch)
             self._insert(batch)
-        return FileResult(request.run_name, request.file_range, request.local_path)
+        return ImportFileResult(request.run_name, request.file_range, imported_rows)
 
     def _insert(self, batch: list[tuple]) -> None:
         # executemany keeps import fast while the persistent table remains class-backed
@@ -184,20 +180,19 @@ class GaiaDbOperation(GaiaSettings, BusinessOperation):
             (request.run_name,),
         )
         count = int(self.db_cursor.fetchone()[0])
-        return ComputeResult(request.run_name, count, "")
+        return ComputeResult(request.run_name, count)
 
-    def export_csv(self, request: ComputeResult) -> ComputeResult:
-        # Export final persistent rows to the challenge CSV file
+    def export_csv(self, request: ExportCsvRequest) -> ExportCsvResult:
+        # Select final persistent rows; CSV formatting lives in exporting.py
         # The final file is sorted to make repeated runs easy to compare
         self.db_cursor.execute(
             f"SELECT source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change "
             f"FROM {CHANGE_TABLE} WHERE run_name = ? ORDER BY source_id",
             (request.run_name,),
         )
-        with self.results_file.open("w", newline="", encoding="utf-8") as output:
-            writer = csv.writer(output)
-            # The challenge output starts with one header row
-            writer.writerow(RESULT_HEADER)
-            while rows := self.db_cursor.fetchmany(1000):
-                writer.writerows(rows)
-        return ComputeResult(request.run_name, request.result_count, str(self.results_file))
+        write_results_csv(self.results_file, self._result_rows())
+        return ExportCsvResult(request.run_name, request.result_count, str(self.results_file))
+
+    def _result_rows(self):
+        while rows := self.db_cursor.fetchmany(1000):
+            yield from rows

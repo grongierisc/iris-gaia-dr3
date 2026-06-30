@@ -4,6 +4,17 @@ import os
 
 from gaia.production import build_production
 
+def _check_folder_writable(folder: str) -> bool:
+    """Check if a folder is writable by attempting to create and delete a temporary file."""
+    try:
+        test_file = os.path.join(folder, "temp_test_file")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return True
+    except Exception:
+        return False
+
 ARCHIVE_URL_TEMPLATE = (
     "https://cdn.gea.esac.esa.int/Gaia/gdr3/Photometry/epoch_photometry/"
     "EpochPhotometry_%s.csv.gz"
@@ -40,6 +51,10 @@ GAIA_SETTINGS = {
     "HttpTimeoutSeconds": int(os.getenv("GAIA_HTTP_TIMEOUT_SECONDS", "120")),
     "DbBatchSize": int(os.getenv("GAIA_DB_BATCH_SIZE", "10000")),
 }
+
+# Check if the output directory is writable, if not, use a temporary directory
+if not _check_folder_writable(GAIA_SETTINGS["OutputDir"]):
+    GAIA_SETTINGS["OutputDir"] = os.getenv("GAIA_OUTPUT_DIR", "/tmp/iris/app/output")
 
 prod = build_production(
     GAIA_SETTINGS,

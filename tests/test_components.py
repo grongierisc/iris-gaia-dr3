@@ -10,12 +10,17 @@ from gaia import operations
 from gaia.messages import (
     ComputeRequest,
     ComputeResult,
-    FileRequest,
-    FileResult,
+    DownloadFileRequest,
+    DownloadFileResult,
+    ExportCsvRequest,
+    ExportCsvResult,
     GaiaBenchmarkRequest,
+    ImportFileRequest,
+    ImportFileResult,
     PrepareRunRequest,
     PrepareRunResult,
 )
+from gaia.exporting import RESULT_HEADER, write_results_csv
 from gaia.operations import (
     GaiaDbOperation,
     GaiaDownloadOperation,
@@ -107,52 +112,60 @@ def test_process_orchestrates_prepare_download_import_compute_complete(tmp_path)
     process.ComputeOperation = "compute"
     process.ExportOperation = "export"
     sync_calls = []
-    multi_calls = []
+    async_calls = []
+    logs = []
 
     def send_request_sync(target, request, timeout=-1, description=None):
-        sync_calls.append((target, request, timeout))
+        sync_calls.append((target, request, timeout, description))
         if target == "prepare":
             return PrepareRunResult(request.run_name)
         if target == "compute":
-            return ComputeResult(request.run_name, 2, "")
+            return ComputeResult(request.run_name, 2)
         if target == "export":
-            return ComputeResult(request.run_name, request.result_count, "output/results.csv")
+            return ExportCsvResult(request.run_name, request.result_count, "output/results.csv")
         return request
 
-    def send_multi_request_sync(target_requests, timeout=-1, description=None):
-        multi_calls.append((target_requests, timeout, description))
-        if description.startswith("Download"):
-            return [
-                (
-                    target,
-                    request,
-                    FileResult(request.run_name, request.file_range, f"/tmp/{request.file_range}.csv.gz"),
-                    1,
-                )
-                for target, request in target_requests
-            ]
-        return [
-            (target, request, FileResult(request.run_name, request.file_range, request.local_path), 1)
-            for target, request in target_requests
-        ]
+    async def send_request_async_ng(target, request, timeout=-1, description=None):
+        async_calls.append((target, request, timeout, description))
+        if target == "download":
+            return DownloadFileResult(request.run_name, request.file_range, f"/tmp/{request.file_range}.csv.gz")
+        if target == "import":
+            return ImportFileResult(request.run_name, request.file_range, 10)
+        return request
 
     process.send_request_sync = send_request_sync
-    process.send_multi_request_sync = send_multi_request_sync
+    process.send_request_async_ng = send_request_async_ng
+    process.log_info = lambda message, *args, **kwargs: logs.append(message)
 
     result = process.on_message(GaiaBenchmarkRequest("run-1"))
 
-    assert result == ComputeResult("run-1", 2, "output/results.csv")
+    assert result == ExportCsvResult("run-1", 2, "output/results.csv")
     assert [call[0] for call in sync_calls] == ["prepare", "compute", "export"]
-    assert [type(call[1]) for call in sync_calls] == [PrepareRunRequest, ComputeRequest, ComputeResult]
-    assert [call[2] for call in sync_calls] == [99, 99, 99]
-    assert [len(call[0]) for call in multi_calls] == [2, 2]
+    assert [type(call[1]) for call in sync_calls] == [
+        PrepareRunRequest,
+        ComputeRequest,
+        ExportCsvRequest,
+    ]
+    assert {call[2] for call in sync_calls + async_calls} == {99}
     assert process.done_file.exists()
     assert not process.error_file.exists()
-    download_requests = [request for _target, request in multi_calls[0][0]]
-    assert [request.file_range for request in download_requests] == ["000000-000001", "000002-000004"]
-    assert download_requests[0].url.endswith("EpochPhotometry_000000-000001.csv.gz")
-    import_requests = [request for _target, request in multi_calls[1][0]]
-    assert import_requests[0].local_path == "/tmp/000000-000001.csv.gz"
+    download_requests = [request for target, request, _timeout, _description in async_calls if target == "download"]
+    assert {request.file_range for request in download_requests} == {"000000-000001", "000002-000004"}
+    assert {request.url.rsplit("/", 1)[-1] for request in download_requests} == {
+        "EpochPhotometry_000000-000001.csv.gz",
+        "EpochPhotometry_000002-000004.csv.gz",
+    }
+    import_requests = [request for target, request, _timeout, _description in async_calls if target == "import"]
+    assert {request.local_path for request in import_requests} == {
+        "/tmp/000000-000001.csv.gz",
+        "/tmp/000002-000004.csv.gz",
+    }
+    download_logs = [log for log in logs if log.startswith("Download Gaia DR3 files:")]
+    import_logs = [log for log in logs if log.startswith("Import Gaia DR3 files:")]
+    assert len(download_logs) == 2
+    assert len(import_logs) == 2
+    assert {log.rsplit(" ", 1)[-1] for log in download_logs} == {"000000-000001", "000002-000004"}
+    assert {log.rsplit(" ", 1)[-1] for log in import_logs} == {"000000-000001", "000002-000004"}
 
 
 def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
@@ -160,26 +173,28 @@ def test_process_marks_run_failed_when_downstream_call_fails(tmp_path):
     process.PrepareOperation = "prepare"
     process.DownloadOperation = "download"
     sync_calls = []
+    async_calls = []
 
     def send_request_sync(target, request, timeout=-1, description=None):
-        sync_calls.append((target, request, timeout))
+        sync_calls.append((target, request, timeout, description))
         if target == "prepare":
             return PrepareRunResult(request.run_name)
         raise AssertionError("compute/export should not be called")
 
-    def send_multi_request_sync(target_requests, timeout=-1, description=None):
-        target, request = target_requests[0]
-        return [(target, request, FileResult(request.run_name, request.file_range), 0)]
+    async def send_request_async_ng(target, request, timeout=-1, description=None):
+        async_calls.append((target, request, timeout, description))
+        raise RuntimeError("download failed")
 
     process.send_request_sync = send_request_sync
-    process.send_multi_request_sync = send_multi_request_sync
+    process.send_request_async_ng = send_request_async_ng
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="download failed"):
         process.on_message(GaiaBenchmarkRequest("run-2"))
 
-    assert "failed with status 0" in process.error_file.read_text(encoding="utf-8")
+    assert "download failed" in process.error_file.read_text(encoding="utf-8")
     assert not process.done_file.exists()
     assert [call[0] for call in sync_calls] == ["prepare"]
+    assert async_calls[0][0] == "download"
 
 
 def test_db_operation_prepares_run_and_clears_persistent_rows(tmp_path, monkeypatch):
@@ -222,9 +237,9 @@ def test_db_operation_parses_gzip_and_batches_aggregate_rows(tmp_path, monkeypat
         output.write("#comment\n")
         csv.writer(output).writerows(rows)
 
-    result = operation.import_file(FileRequest("run-4", "000000-003111", local_path=str(input_file)))
+    result = operation.import_file(ImportFileRequest("run-4", "000000-003111", str(input_file)))
 
-    assert result == FileResult("run-4", "000000-003111", str(input_file))
+    assert result == ImportFileResult("run-4", "000000-003111", 2)
     assert connection.commit_count == 2
     assert len(cursor.executemany_calls) == 1
     inserted_rows = [row for _sql, batch in cursor.executemany_calls for row in batch]
@@ -267,15 +282,15 @@ def test_download_operation_writes_readable_local_file(tmp_path, monkeypatch):
     operation.on_init()
 
     result = operation.on_message(
-        FileRequest(
+        DownloadFileRequest(
             "run-5",
             "000000-003111",
-            url="https://example.invalid/EpochPhotometry_000000-003111.csv.gz",
+            "https://example.invalid/EpochPhotometry_000000-003111.csv.gz",
         )
     )
 
     assert gzip.open(result.local_path, "rb").read() == b"hello"
-    assert result == FileResult("run-5", "000000-003111", result.local_path)
+    assert result == DownloadFileResult("run-5", "000000-003111", result.local_path)
     assert calls == [
         ("https://example.invalid/EpochPhotometry_000000-003111.csv.gz", True, 7),
     ]
@@ -291,7 +306,7 @@ def test_db_operation_computes_with_lifecycle_db_connection(tmp_path, monkeypatc
 
     result = operation.compute_results(ComputeRequest("run-6"))
 
-    assert result == ComputeResult("run-6", 2, "")
+    assert result == ComputeResult("run-6", 2)
     assert [params for _sql, params in cursor.executed] == [
         ("run-6",),
         ("run-6", "run-6"),
@@ -312,9 +327,9 @@ def test_db_operation_exports_results_file(tmp_path, monkeypatch):
     operation = configure(GaiaDbOperation(), tmp_path)
     operation.on_init()
 
-    result = operation.export_csv(ComputeResult("run-6", 2, ""))
+    result = operation.export_csv(ExportCsvRequest("run-6", 2))
 
-    assert result == ComputeResult("run-6", 2, str(operation.results_file))
+    assert result == ExportCsvResult("run-6", 2, str(operation.results_file))
     assert operation.results_file.read_text(encoding="utf-8").splitlines() == [
         "source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change",
         "1,2.0,3.0,4.0,5.0,150.0",
@@ -323,3 +338,14 @@ def test_db_operation_exports_results_file(tmp_path, monkeypatch):
     operation.on_tear_down()
     assert cursor.closed
     assert connection.closed
+
+
+def test_write_results_csv_writes_header_and_rows(tmp_path):
+    path = tmp_path / "results.csv"
+
+    write_results_csv(path, [(1, 2.0, 3.0, 4.0, 5.0, 150.0)])
+
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        ",".join(RESULT_HEADER),
+        "1,2.0,3.0,4.0,5.0,150.0",
+    ]
