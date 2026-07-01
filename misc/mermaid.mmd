@@ -1,0 +1,22 @@
+flowchart LR
+  %% Production: GaiaDR3.Production
+  subgraph group_service["Services"]
+    direction TB
+    node_GaiaBenchmarkService["GaiaBenchmarkService<br/>Python.gaia.services.GaiaBenchmarkService"]
+  end
+  subgraph group_process["Processes"]
+    direction TB
+    node_GaiaBenchmarkProcess["GaiaBenchmarkProcess<br/>Python.gaia.processes.GaiaBenchmarkProcess"]
+  end
+  subgraph group_operation["Operations"]
+    direction TB
+    node_GaiaDownloadOperation["GaiaDownloadOperation<br/>Python.gaia.operations.GaiaDownloadOperation"]
+    node_GaiaDbOperation["GaiaDbOperation<br/>Python.gaia.operations.GaiaDbOperation"]
+  end
+  node_GaiaBenchmarkService ~~~ node_GaiaBenchmarkProcess
+  node_GaiaBenchmarkProcess -- "ComputeOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkProcess -- "DownloadOperation" --> node_GaiaDownloadOperation
+  node_GaiaBenchmarkProcess -- "ExportOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkProcess -- "ImportOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkProcess -- "PrepareOperation" --> node_GaiaDbOperation
+  node_GaiaBenchmarkService -- "Output" --> node_GaiaBenchmarkProcess

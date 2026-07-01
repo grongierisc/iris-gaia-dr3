@@ -2,9 +2,10 @@
 set -e
 cd /irisdev/app
 iop --init
-PYTHONPATH=/irisdev/app iris-persistence apply \
+iris-persistence apply \
   gaia.models:SourceFluxAggregate \
   gaia.models:PhotometryChange \
+  --backup-dir /tmp/iris/app/persistence-backup \
   --to gaia-dr3-persistence-v1 \
   --yes
 iop --migrate settings.py
