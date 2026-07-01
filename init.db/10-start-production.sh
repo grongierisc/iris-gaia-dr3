@@ -2,7 +2,7 @@
 set -e
 cd /irisdev/app
 iop --init
-iris-persistence apply \
+PYTHONPATH=/irisdev/app iris-persistence apply \
   gaia.models:SourceFluxAggregate \
   gaia.models:PhotometryChange \
   --backup-dir /tmp/iris/app/persistence-backup \
