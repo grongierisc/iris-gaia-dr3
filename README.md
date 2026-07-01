@@ -115,6 +115,116 @@ flowchart LR
   node_GaiaBenchmarkService -- "Output" --> node_GaiaBenchmarkProcess
 ```
 
+## Demo Screenshots
+
+These screenshots show the same production running in the IRIS interoperability UI.
+
+### Production
+
+![Gaia DR3 IoP production view](misc/production_screen_shot.png)
+
+The production screenshot comes from the graph declared in [gaia/production.py](gaia/production.py).
+The code creates one polling service, one orchestrating process, one download operation, and one DB operation.
+Several process targets are intentionally routed to the same DB operation so one component owns DBAPI lifecycle.
+
+```python
+prod = Production("GaiaDR3.Production", testing_enabled=True, actor_pool_size=actor_pool_size)
+
+service = prod.service("GaiaBenchmarkService", GaiaBenchmarkService, settings=gaia_settings)
+process = prod.process("GaiaBenchmarkProcess", GaiaBenchmarkProcess, settings=gaia_settings)
+download = prod.operation(
+    "GaiaDownloadOperation",
+    GaiaDownloadOperation,
+    settings=gaia_settings,
+    pool_size=download_pool_size,
+)
+db = prod.operation(
+    "GaiaDbOperation",
+    GaiaDbOperation,
+    settings=gaia_settings,
+    pool_size=import_pool_size,
+)
+
+service.connect(GaiaBenchmarkService.Output, process)
+process.connect(GaiaBenchmarkProcess.DownloadOperation, download)
+process.connect(GaiaBenchmarkProcess.PrepareOperation, db)
+process.connect(GaiaBenchmarkProcess.ImportOperation, db)
+process.connect(GaiaBenchmarkProcess.ComputeOperation, db)
+process.connect(GaiaBenchmarkProcess.ExportOperation, db)
+```
+
+### Settings
+
+![Gaia DR3 production settings examples](misc/settings_examples.png)
+
+The settings screenshot shows the `Gaia` settings exposed on the IoP components.
+The typed settings are declared once in [gaia/runtime.py](gaia/runtime.py), then [settings.py](settings.py) supplies environment-backed defaults.
+
+```python
+class GaiaSettings:
+    ArchiveUrlTemplate: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    FileBoundaries: Annotated[str, Setting(data_type=str, required=True, category="Gaia")]
+    OutputDir: Annotated[str, Setting(data_type=str, required=True, category="Gaia", control=controls.directory())]
+    RequestTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+    HttpTimeoutSeconds: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+    DbBatchSize: Annotated[int, Setting(data_type=int, required=True, category="Gaia")]
+```
+
+```python
+GAIA_SETTINGS = {
+    "ArchiveUrlTemplate": ARCHIVE_URL_TEMPLATE,
+    "FileBoundaries": ",".join(FIRST_20_FILE_BOUNDARIES),
+    "OutputDir": os.getenv("GAIA_OUTPUT_DIR", "/irisdev/app/output"),
+    "RequestTimeoutSeconds": int(os.getenv("GAIA_REQUEST_TIMEOUT_SECONDS", "1800")),
+    "HttpTimeoutSeconds": int(os.getenv("GAIA_HTTP_TIMEOUT_SECONDS", "120")),
+    "DbBatchSize": int(os.getenv("GAIA_DB_BATCH_SIZE", "10000")),
+}
+```
+
+### Async Traces
+
+![Gaia DR3 async download and import traces](misc/async_traces.png)
+
+The trace screenshot shows the two fan-out phases in [gaia/processes.py](gaia/processes.py).
+Prepare, compute, and export are synchronous because they are single sequential steps.
+Download and import use `send_request_async_ng` so the process can log each completed file as soon as its response returns.
+
+```python
+downloads = asyncio.run(
+    self._send_parallel(
+        self.DownloadOperation,
+        [
+            DownloadFileRequest(request.run_name, file_range, self.archive_url(file_range))
+            for file_range in self.file_ranges
+        ],
+        DownloadFileResult,
+        "Download Gaia DR3 files",
+    )
+)
+```
+
+```python
+async def _send_parallel(self, target, requests, expected, description: str):
+    tasks = [
+        asyncio.create_task(
+            self.send_request_async_ng(
+                target,
+                request,
+                timeout=self.request_timeout,
+                description=f"{description}: {request.file_range}",
+            )
+        )
+        for request in requests
+    ]
+
+    results = []
+    for done in asyncio.as_completed(tasks):
+        result = self._expect(await done, expected, target)
+        results.append(result)
+        self.log_info(f"{description}: {len(results)}/{len(tasks)} {result.file_range}")
+    return results
+```
+
 ## Workflow
 
 1. `GaiaBenchmarkService` polls once per second.
