@@ -1,6 +1,6 @@
 # Gaia DR3 Parallel IoP Benchmark
 
-<iframe width="560" height="315" src="https://www.youtube.com/embed/puoq7elk58c?si=k6LBtDmZJvzfcYqI" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+[![Watch the benchmark video](https://img.youtube.com/vi/puoq7elk58c/maxresdefault.jpg)](https://www.youtube.com/watch?v=puoq7elk58c)
 
 This project is an InterSystems IRIS Interoperability On Python, or IoP, application for the Gaia DR3 epoch photometry benchmark described in [GOAL.md](GOAL.md).
 
