@@ -138,39 +138,35 @@ class GaiaDbOperation(GaiaSettings, BusinessOperation):
     def compute_results(self, request: ComputeRequest) -> ComputeResult:
         # Compute final rows inside IRIS with one set-oriented SQL insert
         # Recompute is safe because previous final rows for this run are removed first
+        # %NOCHECK %NOLOCK: safe because run rows were just deleted and this is the only writer
+        # bp_change > 100 OR rp_change > 100 is equivalent to greatest(bp,rp) > 100 with NULLs
         self.db_cursor.execute(f"DELETE FROM {CHANGE_TABLE} WHERE run_name = ?", (request.run_name,))
         self.db_cursor.execute(
             f"""
-            INSERT INTO {CHANGE_TABLE}
+            INSERT %NOCHECK %NOLOCK INTO {CHANGE_TABLE}
                 (run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change)
-            SELECT run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux,percentage_change
+            SELECT ? AS run_name, source_id, bp_min_flux, bp_max_flux, rp_min_flux, rp_max_flux,
+                CASE
+                    WHEN bp_change IS NULL THEN rp_change
+                    WHEN rp_change IS NULL THEN bp_change
+                    WHEN bp_change > rp_change THEN bp_change
+                    ELSE rp_change
+                END AS percentage_change
             FROM (
-                SELECT ? AS run_name, source_id, bp_min_flux, bp_max_flux, rp_min_flux, rp_max_flux,
-                    CASE
-                        WHEN bp_change IS NULL THEN rp_change
-                        WHEN rp_change IS NULL THEN bp_change
-                        WHEN bp_change > rp_change THEN bp_change
-                        ELSE rp_change
-                    END AS percentage_change
-                FROM (
-                    SELECT source_id, bp_min_flux, bp_max_flux, rp_min_flux, rp_max_flux,
-                        CASE WHEN bp_min_flux IS NULL OR bp_min_flux = 0
-                            THEN NULL ELSE ((bp_max_flux - bp_min_flux) / bp_min_flux) * 100 END AS bp_change,
-                        CASE WHEN rp_min_flux IS NULL OR rp_min_flux = 0
-                            THEN NULL ELSE ((rp_max_flux - rp_min_flux) / rp_min_flux) * 100 END AS rp_change
-                    FROM (
-                        SELECT source_id,
-                            MIN(bp_min_flux) AS bp_min_flux,
-                            MAX(bp_max_flux) AS bp_max_flux,
-                            MIN(rp_min_flux) AS rp_min_flux,
-                            MAX(rp_max_flux) AS rp_max_flux
-                        FROM {SOURCE_TABLE}
-                        WHERE run_name = ?
-                        GROUP BY source_id
-                    )
-                )
-            )
-            WHERE percentage_change > 100
+                SELECT source_id,
+                    MIN(bp_min_flux) AS bp_min_flux,
+                    MAX(bp_max_flux) AS bp_max_flux,
+                    MIN(rp_min_flux) AS rp_min_flux,
+                    MAX(rp_max_flux) AS rp_max_flux,
+                    CASE WHEN MIN(bp_min_flux) IS NULL OR MIN(bp_min_flux) = 0
+                        THEN NULL ELSE ((MAX(bp_max_flux) - MIN(bp_min_flux)) / MIN(bp_min_flux)) * 100 END AS bp_change,
+                    CASE WHEN MIN(rp_min_flux) IS NULL OR MIN(rp_min_flux) = 0
+                        THEN NULL ELSE ((MAX(rp_max_flux) - MIN(rp_min_flux)) / MIN(rp_min_flux)) * 100 END AS rp_change
+                FROM {SOURCE_TABLE}
+                WHERE run_name = ?
+                GROUP BY source_id
+            ) aggregated
+            WHERE bp_change > 100 OR rp_change > 100
             """,
             (request.run_name, request.run_name),
         )

@@ -19,6 +19,10 @@ class SourceFluxAggregate(Model):
         indexes = [
             Index("SourceAggregateRunIdx", properties="run_name"),
             Index("SourceAggregateSourceIdx", properties="run_name,source_id"),
+            Index(
+                "SourceAggregateComputeCoverIdx",
+                properties="run_name,source_id,bp_min_flux,bp_max_flux,rp_min_flux,rp_max_flux",
+            ),
         ]
 
 
